@@ -1,2 +1,1 @@
-This folder stores data files for sta553.
-To create folder "data", under the main repository sta553, type "data/", then in the new box, type the file name - readme.
+This folder stores raw and simulated datasets (e.g., .csv, .txt, and .RData files) used for class exercises, homework assignments, and statistical modeling projects.
