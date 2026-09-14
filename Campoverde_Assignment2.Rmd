@@ -1,0 +1,230 @@
+---
+title: The Significance of Demographic and Lifestyle Factors In Explaining Health
+  Insurance Cost
+author: "Kevin Campoverde"
+date: "`r Sys.Date()`"
+output: 
+  html_document:
+    code_folding: show
+    toc: true
+    toc_float: true
+---
+
+```{=html}
+<style type="text/css">
+h1.title {
+  font-size: 24px;
+  font-weight: bold;
+  color: DarkRed;
+  text-align: center;
+  font-family: "Gill Sans", sans-serif;
+}
+h4.author {
+  font-size: 20px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkRed;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkBlue;
+  text-align: center;
+}
+h1 {
+    font-size: 22px;
+    font-weight: bold;
+    font-family: system-ui;
+    color: navy;
+    text-align: left;
+}
+h2 {
+    font-size: 20px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h3 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h4 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: darkred;
+    text-align: left;
+}
+body { background-color:white; }
+.highlightme { background-color:yellow; }
+p { background-color:white; }
+</style>
+```
+
+```{r setup, include=FALSE}
+# Detect, install and load packages if needed.
+if (!require("knitr")) {
+   install.packages("knitr")
+   library(knitr)
+}
+#
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      results = TRUE,
+                      comment = NA
+                      )
+```
+
+## Introduction
+
+Insurance costs vary significantly across individuals, although most people don't understand where these differences lie. Nonetheless, some factors tremendously influence the price of one's premium, such as age, BMI, region, or lifestyle choices. It is important for us to uncover the variables linked with higher insurance premiums in order to better inform individuals of what exactly they are paying for. The practical question comes down to what characteristics reflect a change in insurance premiums. Specifically, our analytical question is which of these variables has the strongest association with insurance costs, mainly testing the strength of the association between BMI and cost. 
+
+## Materials
+
+I've decided to use the following data set, "Medical Cost Personal Dataset," that is available on GitHub. Rather than using an individual's medical history, the data was simulated to reflect demographic and lifestyle patterns that are openly available from the U.S. Census Bureau. Therefore, the data follows realistic patterns without violating any privacy agreements. 
+
+
+```{r read-data}
+url = "https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv"
+insurance = read.csv(url, header = TRUE)
+
+cost = insurance$charges
+age = insurance$age
+bmi = insurance$bmi
+children = insurance$children
+```
+
+The data set contains a total of 7 variables shown in the table below. The medical charges variable is renamed to `cost`. 
+
+```{r}
+var_table = data.frame(
+  Variable = c("cost", "age", "bmi", "children", "sex", "smoker", "region"), 
+  Type = c("Numerical (continuous) - response", "Numerical (continuous)","Numerical (continuous)", "Numerical (discrete count)", "Categorical (2 levels)", "Categorical (2 levels)", "Categorical (4 levels)"),
+           Description = c("Individual medical costs billed by health insurance ($)", "Age of the primary beneficiary (years)", "Body mass index", "Number of children/dependents covered", "female/male", "yes/no", "northeast / northwest /southeast / southwest")
+)
+
+kable(var_table)
+```
+
+Below is the number of records in the data set.
+
+```{r}
+dim(insurance)[1]
+```
+
+With a total of 1338 observations, we have satisfied the requirement of 15 observations per regression coefficient, making it large enough for simple linear regression. 
+
+# Methodology and Analysis
+
+To determine whether there is a linear relationship between cost and an explanatory variable, we use scatter plots. 
+
+```{r fig.align = 'center', fig.height=6, fig.width=8}
+par(mfrow = c(2,3))
+plot(age, cost, xlab = "Age", ylab = "Cost", main = "Cost vs Age")
+plot(bmi, cost, xlab = "BMI", ylab = "Cost", main = "Cost vs BMI")
+plot(children, cost, xlab = "Children", ylab = "Cost", main = "Cost vs Children")
+plot(age, bmi, xlab = "Age", ylab = "BMI", main = "BMI vs Age")
+plot(age, children, xlab = "Age", ylab = "Children", main = "Children vs Age")
+plot(bmi, children, xlab = "BMI", ylab = "Children", main = "Children vs BMI")
+
+```
+
+The correlations between cost and the explanatory variables are calculated below. 
+
+```{r}
+cor(cost,age)
+cor(cost,bmi)
+cor(cost, children)
+```
+Age and BMI show a positive correlation with cost (.30 and .20) whereas the number of children is nearly uncorrelated (0.07). The BMI scatter plot shows signs of spreading wide as BMI increases, potentially signaling unequal variance. There is also a second band formed of high cost observations, suggesting the possibility of a missing categorical variable. We use BMI for the simple linear regression (SLR) and keep the original scales. If a transformation were needed, transforming the response would potentially stabilize the unequal spread. Since the relationship shows no clear curvature, a transformation would not improve the linearity. We will opt for the original scale and use bootstrap instead for the unequal spread. 
+
+We use the least squares method below to fit the SLR. 
+
+```{r}
+m0 = lm(cost ~ bmi)
+summary(m0)
+```
+
+Before using the SLR model for inference, the assumptions will be checked using the residual plots. 
+
+```{r fig.align='center', fig.height=4, fig.width=8}
+par(mfrow = c(1,2))
+plot(bmi, resid(m0), xlab = "BMI", ylab = "Residuals", main = "Residuals vs BMI")
+hist(resid(m0), breaks = 20, xlab = "Residuals", main = "Histogram of Residuals")
+```
+
+
+```{r}
+lowID = which(bmi < mean(bmi))
+mean(resid(m0)[lowID])
+mean(resid(m0)[-lowID])
+```
+For individuals above average BMI, the model underestimates costs with an averge residual of +$533.54 but below the average, it overestimates costs by about -498.0757. Essentially, the model overestimates at a low BMI and underestimates at a high BMI. 
+
+The residuals appear to spread and fan out, indicating the variance is not constant. The histogram is right skewed, signaling non-normality. Since confidence intervals from lm() assume normality and constant variance, we opt for the bootstrap method to derive the confidence intervals. 
+
+For the new confidence intervals, the bootstrap method resamples the residuals of the fitted model. 
+
+```{r}
+set.seed(321)
+E = resid(m0)
+a.hat = coef(m0)[1]
+b.hat = coef(m0)[2]
+
+B = 1000
+bt.alpha = rep(0,B)
+bt.beta = bt.alpha
+for(i in 1:B){
+  bt.e = sample(E, replace = TRUE)
+  y.hat = a.hat + b.hat*bmi + bt.e
+  
+  bt.m = lm(y.hat ~ bmi)
+  bt.alpha[i] = coef(bt.m)[1]
+  bt.beta[i] = coef(bt.m)[2]
+}
+
+alpha.CI = quantile(bt.alpha, c(0.025, 0.975))
+beta.CI = quantile(bt.beta, c(0.025, 0.975))
+
+per.025 = c(alpha.CI[1], beta.CI[1])
+per.975 = c(alpha.CI[2], beta.CI[2])
+
+```
+
+
+The inferential table from the previous regression now includes the bootstrap limits. 
+```{r}
+lm.inference  = as.data.frame((summary(m0))$coef)
+lm.inference$per.025 = per.025
+lm.inference$per.975 = per.975
+kable(as.matrix(lm.inference))
+```
+
+# Results and Conclusions
+
+The correlation analysis found a moderate linear association between age (0.30) and cost, followed by BMI (0.20) and cost. Number of children was negligible (0.07). The findings address our original question: age and BMI play a factor in the cost of insurance premiums whereas the number of children has little to no impact. 
+
+The values from SLR indicate that for every one-unit increase in BMI, the cost increases 394 dollars. The p-value further supports the association with a value below 0.001. However, the R-squared says it's only responsible for about four percent of the variation in cost. Although BMI shows association, the real-world significance alone is negligible. 
+
+We did not rely on the confidence intervals from the original linear model since it assumes normality and constant variance. Adjusting with the bootstrap method tackles this issue and although the findings did not deviate from the original, the bootstrap method is the one reported since it does not require the errors to be normally distributed. The two approaches agree that the slope is significant, since its bootstrap confidence interval lies above zero. The intercept is not significant, and the confidence interval does contain zero. 
+
+# General Discussion
+
+We now know that BMI plays a role in insurance costs but it seems negligible when considering it only accounts for 4%. The residual plots also show some form of grouping. Smoking status or sex may be critical reasons behind this behavior. 
+
+The SLR proved to be a main limitation as it only allows one explanatory variable and not a combination. The combination of BMI with whether an individual smokes can drastically alter the data and lead to different conclusions. Furthermore, the data was simulated, which means it would not be able to provide full accurate real-world estimates. Finally, the bootstrap assumes the residuals follow one distribution, but when the variance changes with BMI, it may become less reliable. 
+
+
+# References 
+
+Lantz, B. (2019). *Machine learning with R* (3rd ed.). Packt Publishing.
+
+Medical cost personal dataset [Data set]. GitHub. https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv
+
