@@ -1,0 +1,681 @@
+---
+title: Associations of Demographic and Lifestyle Factors with Medical Charges
+  Billed to Health Insurance
+author: "Kevin Campoverde"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    fig_width: 6
+    fig_height: 4
+    fig_caption: yes
+    number_sections: yes
+    toc_collapsed: yes
+    code_folding: hide
+    code_download: yes
+    smooth_scroll: yes
+    theme: lumen
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+---
+
+```{=html}
+<style type="text/css">
+h1.title {
+  font-size: 24px;
+  font-weight: bold;
+  color: DarkRed;
+  text-align: center;
+  font-family: "Gill Sans", sans-serif;
+}
+h4.author {
+  font-size: 20px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkRed;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkBlue;
+  text-align: center;
+}
+h1 {
+    font-size: 22px;
+    font-weight: bold;
+    font-family: system-ui;
+    color: navy;
+    text-align: left;
+}
+h2 {
+    font-size: 20px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h3 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h4 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: darkred;
+    text-align: left;
+}
+body { background-color:white; }
+.highlightme { background-color:yellow; }
+p { background-color:white; }
+
+table {
+  border-collapse: collapse;
+  margin: 20px auto;
+  font-size: 14px;
+}
+table td, table th {
+  padding: 6px 12px;
+}
+
+.header-section-number::after {
+  content: ".";
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+# Detect, install and load packages if needed
+if (!require("knitr")) {
+   install.packages("knitr")
+   library(knitr)
+}
+if (!require("dplyr")) {
+   install.packages("dplyr")
+   library(dplyr)
+}
+if (!require("MASS")) {
+  install.packages("MASS")
+  library(MASS)
+}
+if (!require("rcompanion")) {
+  install.packages("rcompanion")
+  library(rcompanion)
+}
+
+if (!require("car")) {
+  install.packages("car")
+  library(car)
+}
+
+# Chunk output options for the knitted report
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      results = TRUE,
+                      comment = NA
+                      )
+```
+
+# Introduction
+
+## Rationale and Research Questions
+
+Medical costs vary significantly across individuals, although most people do not understand where these differences lie. Nonetheless, some factors tremendously influence the medical charges an insurer must cover for an individual, such as age, BMI, region, or lifestyle choices. It is important for us to uncover the variables linked with higher medical charges, since insurers use these expected charges to set the premiums that individuals pay. The practical question comes down to what characteristics reflect a change in the medical costs billed to health insurance. Specifically, our analytical question is which of these variables has the strongest association with medical charges, and what combination of the factors creates the best-supported model in determining medical costs. We also investigate whether a transformation of the response is beneficial for the regression assumptions to hold, and whether the effects of variables BMI and age are dependent on smoking status. Using multiple linear regression (MLR), we can determine what combination of variables explains the most variation in medical costs.
+
+If regression assumptions are violated, we will introduce two bootstrap methods, bootstrapping records and bootstrapping residuals, to find the 95% confidence interval (CI) for each coefficient and compare them with the parametric results.
+
+## Data Source
+
+This report uses the "Medical Cost Personal Dataset," which is available on GitHub (Lantz, 2019). Rather than using an individual's medical history, the data was simulated to reflect demographic and lifestyle patterns that are openly available from the U.S. Census Bureau. Therefore, the data follows realistic patterns without violating any privacy agreements.
+
+```{r read-data}
+# Read the data set directly from GitHub
+url = "https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv"
+insurance = read.csv(url, header = TRUE)
+
+insurance$cost = insurance$charges   # copy of charges under the name cost
+
+# Convenience copies of each variable
+cost     = insurance$cost
+age      = insurance$age
+bmi      = insurance$bmi
+children = insurance$children
+sex      = insurance$sex
+smoker   = insurance$smoker
+region   = insurance$region
+```
+
+## Variables
+
+Within the data set, there is a total of seven variables shown in Table 1. The response variable is the yearly medical cost of an individual billed to health insurance, in dollars, rather than the premium the individual pays. We copied the variable charges into a new variable named cost. The other six variables are explanatory variables, categorized differently: sex, smoker, and region are categorical, while age, BMI, and children are numerical.
+
+```{r variable-table}
+# This creates a table for each variable that describes it
+var_table = data.frame(
+  Variable = c("cost", "age", "bmi", "children", "sex", "smoker", "region"),
+  Type = c("Numerical (continuous) - response", "Numerical (continuous)",
+           "Numerical (continuous)", "Numerical (discrete count)",
+           "Categorical (2 levels)", "Categorical (2 levels)",
+           "Categorical (4 levels)"),
+  Description = c("Individual medical costs billed by health insurance ($)",
+                  "Age of the primary beneficiary (years)", "Body mass index",
+                  "Number of children/dependents covered", "female/male",
+                  "yes/no", "northeast / northwest / southeast / southwest")
+)
+
+kable(var_table, caption = "Table 1. Variables in the insurance data set.")
+```
+
+## Sample Size and Missing Values
+
+When examining the data set, we found no missing values among the total of 1338 observations. The full model will include eleven regression coefficients, consisting of the intercept, three numerical slopes, five dummy variables, and two interaction terms. Therefore, we have enough observations to satisfy the 15-observations-per-coefficient rule.
+
+```{r sample-size}
+dim(insurance)[1]       # number of observations
+n.obs = nrow(insurance) # store the sample size for future reference
+
+sum(is.na(insurance))   # number of missing values in the entire data set
+```
+
+# Data Preparation and Exploratory Analysis
+
+To begin, we explore the data further and identify any relations between explanatory variables. Second, we use MLR to examine the residuals and confirm if there are any violations in the model assumptions. Third, we use a Box-Cox procedure to decide if a transformed scale is necessary. Fourth, we examine interaction terms and perform the step-wise method to compare several models. For this, we use the goodness-of-fit measures and partial F-tests. Fifth, we select the best-supported model based on the results. Finally, we perform the bootstrap method to obtain confidence intervals for the regression coefficients and compare them with the parametric inference. 
+
+## Preparation of the Data
+
+Using the function factor(), we allow R to create dummy variables when the model is fit. By default, the reference level is picked in alphabetical order. In this data, that would make the reference level: female for sex, no for smoker, and northeast for region. No variables were dropped, as they could all have a possible impact on medical costs. We introduce only one new variable later, in Section 3.2: the Box-Cox transformed response.
+
+```{r factor-variables}
+# Use factor() on the categorical variables so lm() builds the dummy variables
+insurance$sex    = factor(insurance$sex)
+insurance$smoker = factor(insurance$smoker)
+insurance$region = factor(insurance$region)
+
+# reference level = first level (alphabetical)
+levels(insurance$sex)
+levels(insurance$smoker)
+levels(insurance$region)
+```
+
+## Exploratory Data Analysis
+
+### Numerical Variables
+
+Below, we check the correlation between the numerical variables and the response variable cost.
+
+```{r correlation}
+# Pairwise correlation matrix of cost and the numerical explanatory variables
+cor(insurance[ , c("cost", "age", "bmi", "children")])
+```
+
+There is a clear positive correlation from age (0.30) and bmi (0.20) with cost, whereas children (0.07) is nearly uncorrelated. To rule out multicollinearity, the explanatory variables should not be strongly correlated with each other. Here, it appears there are only weak correlations from one explanatory variable to another. From last week's report, it seemed there may have been a missing categorical variable from the SLR.
+
+```{r pairs-plot, fig.align='center', fig.height=6, fig.width=7, fig.cap="Figure 1. Pairwise scatter plots of cost, age, BMI and number of children."}
+# Scatter plot matrix of the numerical variables
+pairs(insurance[ , c("cost", "age", "bmi", "children")],
+      pch = 14, cex = 0.5, col = "gray30")
+```
+
+### Categorical Variables
+
+The categorical variables are summarized in Tables 2 through 4, showing cost within each level, and Figure 2 illustrates the effect through a box plot.
+
+```{r summary-sex}
+# Mean, SD and count of cost by sex
+insurance %>%
+  group_by(sex) %>%
+  summarize(mean_cost = mean(cost), sd_cost = sd(cost), n = n()) %>%
+  kable(digits = 0, caption = "Table 2. Summary of cost by sex.")
+```
+
+```{r summary-smoker}
+# Mean, SD and count of cost by smoking status
+insurance %>%
+  group_by(smoker) %>%
+  summarize(mean_cost = mean(cost), sd_cost = sd(cost), n = n()) %>%
+  kable(digits = 0, caption = "Table 3. Summary of cost by smoking status.")
+```
+
+```{r summary-region}
+# Mean, SD and count of cost by region
+insurance %>%
+  group_by(region) %>%
+  summarize(mean_cost = mean(cost), sd_cost = sd(cost), n = n()) %>%
+  kable(digits = 0, caption = "Table 4. Summary of cost by region.")
+```
+
+```{r boxplots, fig.align='center', fig.height=4, fig.width=10, fig.cap="Figure 2. Box plots of cost by sex, smoking status and region."}
+# Creating box plots right next to one another to compare the differences between the categories
+par(mfrow = c(1,3))
+boxplot(cost ~ sex,    data = insurance, col = "gray85", main = "Cost by Sex")
+boxplot(cost ~ smoker, data = insurance, col = "gray85", main = "Cost by Smoker")
+boxplot(cost ~ region, data = insurance, col = "gray85", main = "Cost by Region")
+```
+
+The plots indicate that the categorical variable missing from last week's analysis was whether an individual smokes. Smokers are billed almost four times as much (\$32,050) as their non-smoking counterparts (\$8,434). However, sex and region do not produce a noticeable difference and overlap heavily. Furthermore, most groups in the three plots are right-skewed, with a long tail, indicating we may need to transform the response.
+
+# Model Building
+
+## Initial Full Model
+
+The initial multiple linear regression (MLR) model includes all six explanatory variables and is fitted using the least squares method.
+
+```{r full-model}
+# Full linear regression model with the six explanatory variables
+model.mlr = lm(cost ~ age + bmi + children + sex + smoker + region, data = insurance)
+
+# Inferential statistics (estimate, SE, t, p-value) of the regression coefficients
+summary(model.mlr)$coef
+
+# R-squared and residual standard error
+round(c(R.squared = summary(model.mlr)$r.squared,
+        Residual.SE = summary(model.mlr)$sigma), 3)
+```
+
+The model is statistically significant with about 75% of the variation explained by all explanatory variables. Unlike the SLR that accounted only for 4% of the variation, the full model captures much more of the variation. Sex and the northwest region are the only terms not considered significant; however, we must first check the assumptions before making an inference.
+
+### Multicollinearity Check
+
+The variance inflation factor (VIF) procedure will check how inflated a coefficient's variance is, from the correlation with the other explanatory variables. A VIF value that is above 4 usually requires more investigating. A value above 10 indicates severe multicollinearity.
+
+```{r vif}
+# Variance inflation factors for the full model (from library(car))
+vif(model.mlr)
+```
+
+VIF values are all relatively close to 1, so multicollinearity is not a problem and we keep all variables.
+
+### Residual Diagnostics of the Full Model
+
+```{r full-diag-panel, fig.align='center', fig.height=7, fig.width=8, fig.cap="Figure 3. Standard residual diagnostic plots for the full model (original cost scale)."}
+# 2x2 panel: residuals vs fitted, Q-Q plot, scale-location, residuals vs leverage
+par(mfrow = c(2,2))
+plot(model.mlr)
+```
+
+There are multiple problems found within the residual plots. In Figure 3, the residuals do not appear random, but rather form clusters, and the spread widens as the fitted values increase. Therefore, the constant variance assumption is violated. Furthermore, the Q-Q plot does not follow the line and deviates drastically in the upper tail. Therefore, the evidence shows the normality assumption is also violated. The model tends to overestimate costs for low-cost individuals and underestimate costs for high-cost individuals. We handle these issues with a transformation of the response.
+
+## Box-Cox Transformation of the Response
+
+For the most accurate model, transforming the response is necessary to stabilize the variance and improve the normality of the residuals. The Box-Cox procedure searched over power transformations of cost to find the one that best satisfies these assumptions.
+
+```{r boxcox, fig.align='center', fig.height=4, fig.width=6, fig.cap="Figure 4. Box-Cox log-likelihood profile for the full model; the peak identifies the suggested power transformation of cost."}
+# Box-Cox procedure from library(MASS): finds the lambda that best normalizes the response
+bc = boxcox(model.mlr, lambda = seq(-1, 1, by = 0.05))
+lambda = round(bc$x[which.max(bc$y)],2)   # lambda at the peak
+lambda
+```
+
+The output of 0.15 for lambda has a 95% confidence interval in Figure 4 (about 0.10 to 0.19). It does not include zero, therefore we lean towards the exact Box-Cox transformation.
+
+We do so by using the following equation
+$$\text{cost}^{(\lambda)} = \frac{\text{cost}^{0.15}-1}{0.15},$$
+as the new response. Later we will convert this back into dollars in Section 5. We do not transform the explanatory variables because the scatter plots show no curvature in the variables. We refit the model with the transformed cost as the response.
+
+
+```{r bc-transform, results = 'hide'}
+# Box-Cox transformed response with the estimated lambda
+insurance$bccost = (insurance$cost^lambda - 1)/lambda
+bccost = insurance$bccost
+
+# Full model refitted with the transformed response
+model.mlr.bc = lm(bccost ~ age + bmi + children + sex + smoker + region, data = insurance)
+
+# Inferential statistics of the transformed-scale full model
+summary(model.mlr.bc)$coef
+summary(model.mlr.bc)$r.squared
+```
+
+The transformation finds that all variables, including sex, are significant. The only exception is the northwest region level, which is marginal (p = 0.09). The percentage of variation explained also increased to about 78% (of the transformed cost). 
+
+### Interaction Terms
+
+Examination of the residual plots in Figure 3 highly suggests that BMI and age have an effect that depends on an individual's smoking status. We analyze this through a more telling plot comparing BMI and age with the transformed cost (Figure 5). We separated each plot into two groups—smokers and nonsmokers. The results show a clear difference: transformed cost rises with BMI for smokers and remains relatively flat for nonsmokers, while the age slope rises more steeply for nonsmokers than for smokers.
+
+```{r interaction-plot, fig.align='center', fig.height=4.5, fig.width=10, fig.cap="Figure 5. Transformed cost versus BMI (left) and age (right) by smoking status, with a fitted line for each group."}
+# Scatter plots of transformed cost vs BMI and vs age, colored by smoking status, with a separate regression line per group
+par(mfrow = c(1,2))
+# left: BMI
+plot(insurance$bmi, insurance$bccost, pch = 16, cex = 0.5,
+     col = ifelse(insurance$smoker == "yes", "firebrick", "steelblue"),
+     xlab = "BMI", ylab = "Transformed cost", main = "Transformed cost vs BMI by smoking status")
+abline(lm(bccost ~ bmi, data = subset(insurance, smoker == "yes")), col = "firebrick", lwd = 2)  # smoker line
+abline(lm(bccost ~ bmi, data = subset(insurance, smoker == "no")),  col = "steelblue", lwd = 2)  # non-smoker line
+legend("topleft", legend = c("smoker", "non-smoker"), col = c("firebrick", "steelblue"), pch = 16, bty = "n")
+# right: age
+plot(insurance$age, insurance$bccost, pch = 16, cex = 0.5,
+     col = ifelse(insurance$smoker == "yes", "firebrick", "steelblue"),
+     xlab = "Age", ylab = "Transformed cost", main = "Transformed cost vs age by smoking status")
+abline(lm(bccost ~ age, data = subset(insurance, smoker == "yes")), col = "firebrick", lwd = 2)  # smoker line
+abline(lm(bccost ~ age, data = subset(insurance, smoker == "no")),  col = "steelblue", lwd = 2)  # non-smoker line
+legend("topleft", legend = c("smoker", "non-smoker"), col = c("firebrick", "steelblue"), pch = 16, bty = "n")
+```
+
+## Variable Selection
+
+### Step-wise Selection
+
+The step-wise method allows us to begin with the intercept-only model and it either adds or removes a variable at a time in both directions. We pick the variables added or dropped by finding the model that lowers AIC the most, until there are no changes that improve the model. The model selection procedure will include all six variables and the two interaction terms.
+
+```{r stepwise}
+# Step-wise selection (both directions) from the intercept-only model up to the full transformed model, using AIC
+model.null = lm(bccost ~ 1, data = insurance)     # intercept-only model
+model.upper = lm(bccost~age + bmi + children + sex + smoker + region + bmi:smoker + age:smoker, data = insurance)   # largest model in the scope
+model.step = step(model.null, scope = list(upper = model.upper), direction = "both",trace=0)
+
+formula(model.step)   # model chosen by the step-wise procedure
+```
+
+The step-wise method returns the full transformed model with the two interactions.
+
+### Candidate Models and Goodness-of-Fit
+
+To check the step-wise result, we compare the following three models: the full additive model, the model with BMI-by-smoker interaction, and the model with both interactions. The goodness-of-fit measures are shown in Table 5. We use the transformed response as it allows us to compare them directly. 
+
+```{r candidate-models}
+# Three nested candidate models, adding one interaction at a time (transformed cost as response)
+model.1 = lm(bccost ~ age + bmi + children + sex + smoker + region, data = insurance)                             # additive
+model.2 = lm(bccost ~ age + bmi + children + sex + smoker + region + bmi:smoker, data = insurance)                # + bmi:smoker
+model.3 = lm(bccost ~ age + bmi + children + sex + smoker + region + bmi:smoker + age:smoker, data = insurance)   # + age:smoker
+
+# Goodness-of-fit measures (R-squared, adj. R-squared, AIC, AICc, BIC) from library(rcompanion)
+Result = compareLM(model.1, model.2, model.3)
+kable(Result$Fit.criteria, digits = 3,
+      caption = "Table 5. Goodness-of-fit measures for the three candidate models.")
+```
+
+With every additional interaction term, the values for AIC, BIC, and AICc all decrease. The $R^2$ increased to 0.829 when including both interaction terms along with all variables.
+
+### Comparing Nested Models
+
+Partial F-tests are used to check whether the two interactions are valuable enough to keep in the model.
+
+```{r anova-interaction, results = 'hide'}
+# Partial F-tests for the nested candidate models
+anova(model.1, model.2)   # does adding bmi:smoker improve model 1?
+anova(model.2, model.3)   # does adding age:smoker improve model 2?
+```
+
+Adding the BMI-by-smoker interaction to model 1 shows a significant improvement, $F = 148.8, p < 0.001$. Adding the age-by-smoker interaction to model 2 is also significant, $F = 236.0, p < 0.001$. However, the interaction term age-by-BMI was not significant ($p = 0.57$), hence it will not be in the final model.
+
+```{r age-bmi-check, include=FALSE}
+# Partial F-test for an age:bmi interaction (not significant; reported in the text only)
+anova(model.3, update(model.3, . ~ . + age:bmi))
+```
+
+Based on the results and changes, we chose model 3 as the final model. With model 3, we have the lowest values for AIC, AICc, and BIC, and the highest adjusted $R^2$ among the three candidates.
+
+## Final Model
+
+The final model, on the transformed scale, is
+
+
+$$\text{cost}^{(\lambda)} = \beta_0 + \beta_1\,\text{age} + \beta_2\,\text{bmi} + \beta_3\,\text{children} + \beta_4\,\text{male} + \beta_5\,\text{smoker} + \beta_6\,\text{northwest} + \beta_7\,\text{southeast} + \beta_8\,\text{southwest} + \beta_9\,(\text{bmi} \times \text{smoker}) + \beta_{10}\,(\text{age} \times \text{smoker}) + \varepsilon$$
+
+where `male`, `smoker`, and the three region terms are dummy variables equal to 1 for that group and 0 otherwise, and $\lambda = 0.15$.
+
+```{r final-model}
+# Final model chosen from the candidate comparison (model 3)
+model.final = lm(bccost ~ age + bmi + children + sex + smoker + region + bmi:smoker + age:smoker, data = insurance)
+
+cmtrx = summary(model.final)$coef   # coefficient matrix (used again in the bootstrap tables)
+
+# Global goodness-of-fit of the final model
+round(c(R.squared = summary(model.final)$r.squared,
+        Adj.R.squared = summary(model.final)$adj.r.squared,
+        Residual.SE = summary(model.final)$sigma), 3)
+```
+
+```{r boxcox-recheck, include=FALSE}
+# Re-run Box-Cox on the final model structure (reported in the text only)
+bc.final = boxcox(cost ~ age + bmi + children + sex + smoker + region + bmi:smoker + age:smoker,
+                  data = insurance, lambda = seq(-0.5, 0.5, by = 0.01), plotit = FALSE)
+
+range(bc.final$x[bc.final$y > max(bc.final$y)- qchisq(0.95,1)/2])   # 95% CI for lambda
+```
+
+A significant improvement is observed in the final model, with 83% of the variation in the transformed cost explained by the variables. When we use the Box-Cox procedure once more on the final model, we obtain a 95% CI [0.08, 0.17] for $\lambda$, which still contains the value 0.15. The fitted model with the plugged-in estimates would be
+
+$$\widehat{\text{cost}^{(\lambda)}} = 12.351 + 0.151\,\text{age} + 0.005\,\text{bmi} + 0.368\,\text{children} - 0.297\,\text{male} + 3.569\,\text{smoker} - 0.245\,\text{northwest} - 0.531\,\text{southeast} - 0.560\,\text{southwest} + 0.234\,(\text{bmi} \times \text{smoker}) - 0.113\,(\text{age} \times \text{smoker})$$
+
+## Residual Diagnostics of the Final Model
+
+```{r final-diag-panel, fig.align='center', fig.height=7, fig.width=8, fig.cap="Figure 6. Standard residual diagnostic plots for the final model (transformed cost as the response)."}
+# Standard 2x2 diagnostic panel for the final model
+par(mfrow = c(2,2))
+plot(model.final)
+```
+
+The residual plots of the final model (Figure 6) are improved; however, they still show signs of curvature, unequal variance, and a group of large positive residuals. The observations with abnormal behaviors almost all come from non-smokers, since the prediction is far less than what is truly observed. Therefore, this suggests there is an unaccounted variable missing from the data set such as existing medical conditions or possibly alcohol consumption. A transformation is unable to fix this behavior and it can only be done with additional variables in the data set. With a large sample, the normality assumption for each estimated coefficient is satisfied due to the central limit theorem. However, the constant variance condition is not met, so we utilize bootstrap confidence intervals to interpret the standard errors and p-values more carefully.
+
+
+# Bootstrapping the Final Model
+
+For residuals that are not normally distributed and do not have a constant variance, the preferred approach is the bootstrap since it does not rely on those assumptions. The two methods used will be bootstrapping records and bootstrapping residuals with $B=10000$ bootstrap samples each. The final model will then be refitted to every bootstrap sample and there will be a 95% CI for each coefficient.
+
+## Bootstrapping Records
+
+A bootstrap sample of records is obtained by sampling 1338 row numbers with replacement and taking the corresponding rows of the data set.
+
+```{r bootstrap-cases, results='hide'}
+set.seed(2026)   # for reproducible bootstrap results
+B = 10000        # number of bootstrap replicates
+##
+num.p = length(coef(model.final))         # number of regression coefficients (11, including the interactions)
+smpl.n = dim(model.frame(model.final))[1] # sample size
+## zero matrix to store bootstrap coefficients
+coef.mtrx = matrix(rep(0, B*num.p), ncol = num.p)
+##
+for (i in 1:B){
+  bootc.id = sample(1:smpl.n, smpl.n, replace = TRUE) # bootstrap sample of row IDs
+  model.btc = lm(bccost ~ age + bmi + children + sex + smoker + region + bmi:smoker + age:smoker,
+                 data = insurance[bootc.id,])         # fit final model to the bootstrap sample
+  coef.mtrx[i,] = coef(model.btc)    # extract coefs from bootstrap regression model
+}
+```
+
+```{r boot-hist-fn}
+# Histogram of one bootstrap coefficient with a normal curve and a density curve (function from the class notes)
+boot.hist = function(bt.coef.mtrx, var.id, var.nm){
+  ## bt.coef.mtrx = matrix for storing bootstrap estimates of coefficients
+  ## var.id = variable ID (1, 2, ..., k+1)
+  ## var.nm = variable name on the hist title, must be the string in the double quotes
+  ## Bootstrap sampling distribution of the estimated coefficients
+  x1.1 <- seq(min(bt.coef.mtrx[,var.id]), max(bt.coef.mtrx[,var.id]), length=300 )
+  y1.1 <- dnorm(x1.1, mean(bt.coef.mtrx[,var.id]), sd(bt.coef.mtrx[,var.id]))
+  # height of the histogram - use it to make a nice-looking histogram.
+  highestbar = max(hist(bt.coef.mtrx[,var.id], plot = FALSE)$density)
+  ylimit <- max(c(y1.1,highestbar))
+  hist(bt.coef.mtrx[,var.id], probability = TRUE, main = var.nm, xlab="",
+       col = "azure1",ylim=c(0,ylimit), border="lightseagreen")
+  lines(x = x1.1, y = y1.1, col = "red3")       # normal density curve
+  lines(density(bt.coef.mtrx[,var.id], adjust=2), col="blue")    # loess curve
+}
+```
+
+```{r boot-cases-hist, fig.align='center', fig.width=9, fig.height=7.5, fig.cap="Figure 7. Bootstrap (records) sampling distributions of the final-model coefficients. Red: normal density curve; blue: bootstrap density curve."}
+par(mfrow=c(3,4))  # histograms of bootstrap coefs
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=1, var.nm ="Intercept" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=2, var.nm ="Age" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=3, var.nm ="BMI" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=4, var.nm ="Children" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=5, var.nm ="Male" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=6, var.nm ="Smoker" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=7, var.nm ="Northwest" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=8, var.nm ="Southeast" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=9, var.nm ="Southwest" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=10, var.nm ="BMI x Smoker" )
+boot.hist(bt.coef.mtrx=coef.mtrx, var.id=11, var.nm ="Age x Smoker" )
+```
+
+Each histogram in Figure 7 has two curves; red represents the estimated coefficient and standard error from the regression output, on which the p-values are based, and blue represents the non-parametric estimate of the bootstrap sampling distribution. From the results, the curves are closely aligned, suggesting that both the significance tests and the bootstrap confidence intervals are consistent.
+
+## Bootstrapping Residuals
+
+The residual bootstrap keeps the explanatory variables fixed and generates a new response as the fitted value from the final model plus a residual sampled with replacement from the original residuals. The final model is refitted to each bootstrap response.
+
+```{r bootstrap-residuals, results='hide'}
+model.resid = model.final$residuals   # residuals of the final model
+##
+btr.mtrx = matrix(rep(0, B*num.p), ncol=num.p) # zero matrix to store boot coefs
+for (i in 1:B){
+  ## Bootstrap response values = fitted values + resampled residuals
+  bt.bccost = model.final$fitted.values +
+        sample(model.final$residuals, smpl.n, replace = TRUE)  # bootstrap residuals
+  insurance$bt.bccost = bt.bccost   #  send the boot response to the data
+  btr.model = lm(bt.bccost ~ age + bmi + children + sex + smoker + region + bmi:smoker + age:smoker,
+                 data = insurance)  # refit final model to the bootstrap response
+  btr.mtrx[i,] = btr.model$coefficients   # store coefs
+}
+```
+
+```{r boot-resid-hist, fig.align='center', fig.width=9, fig.height=7.5, fig.cap="Figure 8. Residual-bootstrap sampling distributions of the final-model coefficients. Red: normal density curve; blue: bootstrap density curve."}
+par(mfrow=c(3,4))  # histograms of bootstrap coefs
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=1, var.nm ="Intercept" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=2, var.nm ="Age" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=3, var.nm ="BMI" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=4, var.nm ="Children" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=5, var.nm ="Male" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=6, var.nm ="Smoker" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=7, var.nm ="Northwest" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=8, var.nm ="Southeast" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=9, var.nm ="Southwest" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=10, var.nm ="BMI x Smoker" )
+boot.hist(bt.coef.mtrx=btr.mtrx, var.id=11, var.nm ="Age x Smoker" )
+```
+
+The sampling distributions in Figure 8 also suggest normality. Since constant variance was not met before, we consider bootstrapping records the more robust of the two methods, because the residual bootstrap treats all residuals as interchangeable.
+
+
+# Combining the Results of the Regular Model and Bootstrap
+
+## Summary of the Inferential Results
+
+Using the bootstrap confidence intervals, the information can now be combined with the parametric estimates, standard errors and p-values of the final model.
+
+```{r boot-ci-table}
+btc.ci = NULL   # records bootstrap CIs
+btc.wd = NULL   # their widths
+btr.ci = NULL   # residual bootstrap CIs
+btr.wd = NULL   # their widths
+for (i in 1:num.p){
+  # records bootstrap: 2.5% and 97.5% percentiles
+  lci.025 = round(quantile(coef.mtrx[, i], 0.025, type = 2),8)
+  uci.975 = round(quantile(coef.mtrx[, i],0.975, type = 2 ),8)
+  btc.wd[i] =  uci.975 - lci.025
+  btc.ci[i] = paste("[", format(round(lci.025,4), scientific = FALSE),", ", format(round(uci.975,4), scientific = FALSE),"]")
+  # residual bootstrap: 2.5% and 97.5% percentiles
+  lci.025 = round(quantile(btr.mtrx[, i], 0.025, type = 2),8)
+  uci.975 = round(quantile(btr.mtrx[, i],0.975, type = 2 ),8)
+  btr.wd[i] = uci.975 - lci.025
+  btr.ci[i] = paste("[", format(round(lci.025,4), scientific = FALSE),", ", format(round(uci.975,4), scientific = FALSE),"]")
+}
+# combine parametric output (drop the t column) with both bootstrap CIs
+kable(as.data.frame(cbind(formatC(cmtrx[,-3],4,format="f"), btc.ci.95=btc.ci, btr.ci.95=btr.ci)),
+      caption="Table 6. Final combined inferential statistics: p-values and 95% bootstrap CIs from bootstrapping records (btc) and bootstrapping residuals (btr).")
+```
+
+```{r boot-ci-width}
+# CI widths side by side
+width.table = round(cbind(btc.wd, btr.wd),4)
+rownames(width.table) = rownames(cmtrx)
+kable(width.table, caption="Table 7. Width of the two 95% bootstrap confidence intervals.")
+```
+
+All three methods lead to the same conclusions and find significance in every variable except BMI as a main effect: age, children, sex, smoker, the three regions, and both interaction terms. This is because these coefficients have a p-value below 0.05 and the bootstrap intervals do not contain zero (the upper limit for the northwest region is just slightly below zero), with the sole exception of BMI as a main effect ($p=0.50$). However, the hierarchy rule keeps the main effect of BMI since the interaction between BMI and smoker was significant. The two bootstrap methods produced confidence intervals with similar widths. Since we are unable to fully satisfy constant variance, the selected primary inference would consist of the records-bootstrap intervals. Results show the non-parametric and parametric methods are nearly identical, signaling that the conclusions are not sensitive to the assumption violations.
+
+
+## Interpretation of the Regression Coefficients
+
+Since the Box-Cox transformation was utilized on the response, there is no interpretation for $\beta$ in a percent or dollar amount, but it can still imply a positive or negative association. Table 6 allows a clear view of the significance and sign of each coefficient with every other variable fixed. Transformed cost increases with age and the number of children, is lower for males than females, and is lower in the three other regions than in the northeast. The main effects of BMI and smoker are kept, but we interpret those together with the significant interactions.
+
+- **BMI slope:** The slope is $0.005$ for non-smokers and $0.239$ for smokers.
+- **Age slope:** The slope is $0.151$ for non-smokers and approximately $0.039$ for smokers.
+
+We take the inverse transformation to convert it back to the original scale, $\text{cost} = (\lambda\,\widehat{\text{cost}^{(\lambda)}} + 1)^{1/\lambda}$. However, keep in mind, the dollar amount is an estimate of a typical cost and not the average cost. Table 8 predicts the cost of an individual based on their smoking status at three different BMI levels for a 40-year-old female with no children in the northeast.
+
+```{r bmi-smoker-table}
+# Predicted cost ($) for a smoker vs a non-smoker at three BMI values: back-transform the fitted values
+inv.bc = function(z) (lambda*z + 1)^(1/lambda)   # inverse Box-Cox transformation
+bmi_vals = c(25, 30, 35)
+# profile: 40-year-old female, no children, northeast
+profile = data.frame(age = 40, bmi = rep(bmi_vals, 2), children = 0,
+                     sex = factor("female", levels = levels(insurance$sex)),
+                     smoker = factor(rep(c("no", "yes"), each = 3), levels = levels(insurance$smoker)),
+                     region = factor("northeast", levels = levels(insurance$region)))
+profile$predicted_cost = round(inv.bc(predict(model.final, newdata = profile)))   # back to dollars
+bmi_table = data.frame(BMI = bmi_vals,
+                       Nonsmoker_cost = profile$predicted_cost[1:3],
+                       Smoker_cost = profile$predicted_cost[4:6])
+bmi_table$Smoker_vs_Nonsmoker_Multiplier = round(bmi_table$Smoker_cost / bmi_table$Nonsmoker_cost, 1)   # ratio
+kable(bmi_table, caption = "Table 8. Predicted cost ($) for a smoker vs. a non-smoker at the same BMI (40-year-old female, no children, northeast).")
+```
+
+
+```{r cost-comparisons, results='hide'}
+# One-unit comparisons in dollars for a reference profile: 45-year-old male, 2 children, southeast, BMI 30
+ref = function(age = 45, bmi = 30, children = 2, sex = "male", smoker = "no", region = "southeast"){
+  nd = data.frame(age = age, bmi = bmi, children = children,
+                  sex = factor(sex, levels = levels(insurance$sex)),
+                  smoker = factor(smoker, levels = levels(insurance$smoker)),
+                  region = factor(region, levels = levels(insurance$region)))
+  round(inv.bc(predict(model.final, newdata = nd)))   # predicted cost in dollars
+}
+c(nonsmoker = ref(), smoker = ref(smoker = "yes"))                              # smoking status
+c(ref(age = 46) - ref(), ref(age = 46, smoker = "yes") - ref(smoker = "yes"))   # one more year of age
+c(ref(bmi = 31) - ref(), ref(bmi = 31, smoker = "yes") - ref(smoker = "yes"))   # one more BMI unit
+ref(children = 3) - ref()                                                       # one more child
+ref(sex = "female") - ref()                                                     # female vs male
+c(ref(region = "northeast") - ref(), ref(region = "northwest") - ref(),
+  ref(region = "southwest") - ref())                                            # regions vs southeast
+```
+
+If we use a 45-year-old male as a reference profile such that he has two children in the southeast and a BMI of 30, the model suggests the following while keeping everything else fixed.
+
+- **Smoking.** \$8,500 for a non-smoker and \$30,800 for a smoker, showing a huge \$22,000 difference. This is the strongest factor in the model.
+- **BMI and smoking.** For an additional unit in BMI (non-smoker), cost rises only \$10, therefore this is considered negligible. For an additional unit in BMI (smoker), cost rises by about \$1,600. We can verify this using Table 8, which finds a smoker costs about 3.3 times a non-smoker at BMI 25, but with a BMI of 35, the cost is about 5.4 times higher.
+- **Age and smoking.** \$340 more for every additional year in age (non-smoker), whereas it is \$260 more for an additional year in age (smoker).
+- **Children.** For every additional child, cost increases by about \$670.
+- **Sex.** Holding other variables fixed, females have an \$840 higher cost than their male counterparts. This differs from what the initial model found (higher cost for males) because a larger share of the males in the data set are smokers (24% versus 17% of females).
+- **Region.** With the southeast used as the base profile, the cost is \$1,200 higher in the northeast and about \$640 higher in the northwest, while the southwest has a similar cost to the base.
+
+# Summary and Discussion
+
+## Conclusions
+
+It is possible to estimate the medical charges an individual will generate for the insurer with the variables considered. All six variables discussed here were found to be associated with medical cost, with smoking status having the strongest effect. The residual outcome from the initial model pushed the use of a transformation on the response. The Box-Cox procedure favored a power transformation with $\lambda = 0.15$, which was used directly. The best model included all the variables and the two interaction terms, BMI-by-smoker and age-by-smoker, explaining 83% of the variation in the transformed cost. Such behavior reflects that BMI has a considerable effect on medical charges when combined with smoking status, rather than on its own. Both bootstrap methods gave confidence intervals that agreed with the parametric results; therefore, conclusions made on the variables that matter most hold up regardless of the constant variance violation.
+
+## Main Findings
+
+In the earlier SLR report, BMI alone was examined and only explained 4% of the variation in cost. The MLR determines that BMI's effect on the transformed cost is dependent on smoking status. Once all things are considered, an insurer setting premiums, or an individual trying to understand them, should recognize that smoking status is the main driver of increased cost, more than any other factor: depending on age and BMI, a smoker can see a cost of \$12,000 to \$31,000 more annually compared to a nonsmoker.
+
+
+## Drawbacks and Future Improvements
+
+There are several limitations we observed. Firstly, the data was simulated, which means it would not be able to provide fully accurate real-world estimates. Secondly, there appears to be a group of non-smokers with very high charges that cannot be explained by any of the variables in the data set. This may be due to existing medical conditions or possibly alcohol consumption. Thirdly, since the analysis is observational, we cannot determine whether a change in category levels will result in a change in cost. Finally, since the response was transformed, the interpretation of the coefficients is not in simple dollars or percentages. We used the inverse transformation to convert it back to the original scale, which describes a typical cost rather than the average. In the future, we should look for additional variables that contribute to the health of an individual (diet, alcohol consumption, existing medical conditions, etc.) or check if BMI acts as a threshold rather than linearly for smokers. The use of more robust regression methods to directly tackle the non-constant variance should be applied as well.
+
+
+## Recommendations on the Applications of the Model
+
+The following practical applications can be supported by the model and used by insurers or health experts:
+
+1. **Smoking status is the largest driver of cost.** There is a huge difference in cost when considering smoking status that dwarfs all other factors. There is about a \$20,000 difference annually, and it is where programs for quitting would reduce the costs the most.
+2. **BMI matters mainly for smokers.** BMI shows no association with cost if the individual does not smoke. However, an additional unit in BMI for a smoker is approximately \$1,600 in additional charges. Therefore, programs that solely target BMI should instead focus on BMI together with smoking status.
+3. **Age-rated premiums are justified.** There is a gradual increase in cost with age, with a non-smoker's cost tripling between ages 30 and 60. The number of children and region have small effects (about \$670 per child and \$1,200 at most between regions).
+
+It is important to note that the model is unable to predict the cost for an individual with existing health conditions, or the new cost if there is a change in smoking status or BMI.
+
+# References
+
+Lantz, B. (2019). *Machine learning with R* (3rd ed.). Packt Publishing.
+
+Medical cost personal dataset [Data set]. GitHub. <https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv>
