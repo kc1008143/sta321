@@ -1,0 +1,520 @@
+---
+title: Associations of Demographic and Lifestyle Factors with High Medical Charges
+  Billed to Health Insurance
+author: "Kevin Campoverde"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    fig_width: 6
+    fig_height: 4
+    fig_caption: yes
+    number_sections: yes
+    toc_collapsed: yes
+    code_folding: hide
+    code_download: yes
+    smooth_scroll: yes
+    theme: lumen
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+---
+
+```{=html}
+<style type="text/css">
+h1.title {
+  font-size: 24px;
+  font-weight: bold;
+  color: DarkRed;
+  text-align: center;
+  font-family: "Gill Sans", sans-serif;
+}
+h4.author {
+  font-size: 20px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkRed;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkBlue;
+  text-align: center;
+}
+h1 {
+    font-size: 22px;
+    font-weight: bold;
+    font-family: system-ui;
+    color: navy;
+    text-align: left;
+}
+h2 {
+    font-size: 20px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h3 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h4 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: darkred;
+    text-align: left;
+}
+body { background-color:white; }
+.highlightme { background-color:yellow; }
+p { background-color:white; }
+
+table {
+  border-collapse: collapse;
+  margin: 20px auto;
+  font-size: 14px;
+}
+table td, table th {
+  padding: 6px 12px;
+}
+
+.header-section-number::after {
+  content: ".";
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+# Detect, install and load packages if needed
+if (!require("knitr")) {
+   install.packages("knitr")
+   library(knitr)
+}
+if (!require("dplyr")) {
+   install.packages("dplyr")
+   library(dplyr)
+}
+if (!require("MASS")) {
+  install.packages("MASS")
+  library(MASS)
+}
+if (!require("car")) {
+  install.packages("car")
+  library(car)
+}
+if (!require("psych")) {
+  install.packages("psych")
+  library(psych)
+}
+
+# Chunk output options for the knitted report
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      results = TRUE,
+                      comment = NA
+                      )
+```
+
+# Introduction
+
+In this section, we describe the motivation and research questions of the analysis, the source of the data, the variables, and the sample size.
+
+## Rationale and Research Questions
+
+Medical costs vary significantly across individuals, although it is not always clear where these differences lie. Nonetheless, some factors have a strong link with the medical charges an insurer must cover for an individual, such as age, BMI, region, or lifestyle choices. It is important for us to uncover the variables linked with high medical charges, since insurers use these expected charges to set the premiums that individuals pay. In the previous report, we used multiple linear regression (MLR) to study the medical cost in dollars. However, we now look into whether an individual's charges are high.
+
+The practical question is to determine what factors are most associated with high medical charges billed to health insurance. Specifically, in this report, we would like to determine which of the variables are most associated with the odds of high cost and the strength of these associations expressed as odds ratios. Furthermore, we will interpret the interaction terms BMI-by-smoker and age-by-smoker using the odds ratios. Since the response is binary, we use multiple logistic regression, and this report focuses only on association analysis, not prediction.
+
+
+## Data Source
+
+This report uses the "Medical Cost Personal Dataset," which is available on GitHub (Lantz, 2019). Rather than using an individual's medical history, the data was simulated to reflect demographic and lifestyle patterns that are openly available from the U.S. Census Bureau. Therefore, the data follows realistic patterns without violating any privacy agreements.
+
+```{r read-data}
+# Read the data set directly from GitHub
+url = "https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv"
+insurance = read.csv(url, header = TRUE)
+
+insurance$cost = insurance$charges   # copy of charges under the name cost
+```
+
+## Variables
+
+In this data set, we have a set of seven variables. The variable charges is the yearly medical cost of an individual billed to health insurance, in dollars, and we copied it into a new variable named cost. The **response variable**, high.cost, comes directly from the cost variable, where we label anything above the 75th percentile as high and everything else as not.high (Section 2.1). Table 1 lists all the variables used in the analysis.
+
+```{r variable-table}
+# This creates a table for each variable that describes it
+var_table = data.frame(
+  Variable = c("high.cost", "cost", "age", "bmi", "children", "grp.children",
+               "sex", "smoker", "region"),
+  Type = c("Categorical (2 levels) - response", "Numerical (continuous)",
+           "Numerical (continuous)", "Numerical (continuous)",
+           "Numerical (discrete count)", "Categorical (4 levels)",
+           "Categorical (2 levels)", "Categorical (2 levels)",
+           "Categorical (4 levels)"),
+  Description = c("high = cost above the 75th percentile; not.high = otherwise",
+                  "Individual medical costs billed by health insurance ($)",
+                  "Age of the primary beneficiary (years)", "Body mass index",
+                  "Number of children/dependents covered",
+                  "Grouped number of children: 0 / 1 / 2 / 3+",
+                  "female/male", "yes/no",
+                  "northeast / northwest / southeast / southwest")
+)
+
+kable(var_table, caption = "Table 1. Variables used in the analysis.")
+```
+
+The data set includes the following: the response is binary, there are two continuous explanatory variables (age and BMI), and there are four categorical explanatory variables (grp.children, sex, smoker, and region).
+
+## Sample Size and Missing Values
+
+When examining the data set, we found no missing values among the total of 1338 observations.
+
+```{r sample-size, results='hide'}
+dim(insurance)[1]       # number of observations
+sum(is.na(insurance))
+```
+
+# Data Management and Variable Inspection
+
+To begin, we create a binary response by choosing a cut-off for dichotomizing cost. Second, we decide whether a transformation is necessary by evaluating the numerical explanatory variables. Third, we examine the categorical variables and create a new grouped variable from children (0, 1, 2, and 3+).
+
+## Creating the Binary Response
+
+The natural cut-offs for dichotomizing cost would be either the median or the 75th percentile. Below, the horizontal lines represent the cut-offs of the median (\$`r format(round(median(insurance$cost)), big.mark = ",")`) and the 75th percentile (\$`r format(round(quantile(insurance$cost, 0.75)), big.mark = ",")`) of cost. Figure 1 plots cost against BMI by smoking status, with the median as the dashed line and the 75th percentile as the solid line.
+
+```{r cutoff-plot, fig.align='center', fig.height=4.5, fig.width=7, fig.cap="Figure 1. Cost versus BMI by smoking status. Dashed line: median of cost; solid line: 75th percentile of cost."}
+# Scatter plot of cost vs BMI, colored by smoking status, with the two candidate cut-offs
+plot(insurance$bmi, insurance$cost, pch = 16, cex = 0.5,
+     col = ifelse(insurance$smoker == "yes", "firebrick", "steelblue"),
+     xlab = "BMI", ylab = "Cost ($)", main = "Cost vs BMI by smoking status")
+abline(h = median(insurance$cost), lty = 2, lwd = 2)          # median cut-off
+abline(h = quantile(insurance$cost, 0.75), lty = 1, lwd = 2)  # 75th percentile cut-off
+legend("topleft", legend = c("smoker", "non-smoker"), col = c("firebrick", "steelblue"),
+       pch = 16, bty = "n")
+```
+
+```{r cutoff-table}
+cut.check = data.frame(
+  smoker = levels(factor(insurance$smoker)),
+  n = as.vector(table(insurance$smoker)),
+  above.median = as.vector(tapply(insurance$cost > median(insurance$cost), insurance$smoker, sum)),
+  above.75th.percentile = as.vector(tapply(insurance$cost > quantile(insurance$cost, 0.75),
+                                           insurance$smoker, sum))
+)
+kable(cut.check, caption = "Table 2. Number of individuals above each candidate cut-off by smoking status.")
+```
+
+Figure 1 and Table 2 demonstrate that all 274 smokers have a cost above the median line, so there would be no smokers in the lower-cost group and the model could not estimate the effect of smoking. Therefore, we use the 75th percentile line. Since the separation is no longer complete at the 75th percentile mark (19 smokers fall below it), we label **high-cost** as any individual above it. Using the cut-off, there is no serious imbalance between the two groups, as the data shows there are 335 individuals considered high-cost (25%) and 1,003 not high-cost.
+
+In Figure 1, there is still an observed pattern where the cost of smokers rises as their BMI increases, whereas the cost of a non-smoker stays relatively flat as BMI increases. Notably, we observe that individuals who smoke and have a BMI of 30 or more are all above the high-cost threshold.
+
+By default, glm() models the probability of the second level of a factor, and R orders the levels alphabetically. Since "not.high" comes after "high" alphabetically, we set the levels of high.cost so that the model estimates the probability of being high-cost, $P(\text{high.cost} = \text{high})$.
+
+```{r binary-response}
+# 75th percentile of cost used as the cut-off
+cut.off = quantile(insurance$cost, 0.75)
+
+# Binary response: high = cost above the cut-off
+insurance$high.cost = ifelse(insurance$cost > cut.off, "high", "not.high")
+
+# Set "not.high" as the reference level so glm() models P(high.cost = "high")
+insurance$high.cost = factor(insurance$high.cost, levels = c("not.high", "high"))
+```
+
+## Numerical Explanatory Variables
+
+Using our graphs below, we evaluate any correlation between the numerical explanatory variables along with their distributions.
+
+```{r pairs-panels, fig.align='center', fig.height=6, fig.width=6, fig.cap="Figure 2. Pairwise scatter plots, histograms, and correlations of age, BMI, and number of children."}
+# Pairwise scatter plots with histograms and correlations (from library(psych))
+pairs.panels(insurance[ , c("age", "bmi", "children")],
+             method = "pearson", # correlation method
+             hist.col = "#00AFBB",
+             density = TRUE,  # show density plots
+             ellipses = TRUE  # show correlation ellipses
+             )
+```
+
+The graphs show no signs of multicollinearity, as the correlations between the numerical variables are weak (less than or equal to 0.11). The distributions show age is spread evenly, BMI appears symmetric, and the number of children is heavily right-skewed. To control for the small number of individuals with more than three children, we opt for creating a new categorical variable for children (Section 2.3).
+
+Figure 3 compares age and BMI between the two groups of the response.
+
+```{r boxplots-numerical, fig.align='center', fig.height=4, fig.width=8, fig.cap="Figure 3. Box plots of age and BMI by high-cost status."}
+# Box plots of the numerical variables by the binary response
+par(mfrow = c(1,2))
+boxplot(age ~ high.cost, data = insurance, col = "gray85", main = "Age by high-cost status",
+        xlab = "high.cost", ylab = "Age")
+boxplot(bmi ~ high.cost, data = insurance, col = "gray85", main = "BMI by high-cost status",
+        xlab = "high.cost", ylab = "BMI")
+```
+
+When comparing the two groups, high-cost individuals are slightly older (median age 42 versus 39), and the difference in BMI is negligible (median 30.90 versus 30.14). These differences are small because smokers and non-smokers are pooled together. Together with Figure 1, this suggests that age and BMI are mainly associated with high cost through their interaction with smoking status.
+
+**Variable transformation.**
+
+In the previous report, the response was continuous, and we used a Box-Cox transformation to control the unequal variance and the huge residuals. In this report, since the response is now binary and the distributions of age and BMI show no signs of heavy skew, we chose to skip the transformation. Instead, the results will be interpreted using the odds ratios on the original scales.
+
+
+## Categorical Explanatory Variables and Sparse Categories
+
+### Number of Children
+
+Table 3 shows the number of individuals and the percentage of high-cost individuals for each number of children.
+
+```{r children-table}
+# Frequency and percentage of high-cost individuals for each number of children
+child.table = data.frame(
+  children = names(table(insurance$children)),
+  n = as.vector(table(insurance$children)),
+  pct.high = round(100*as.vector(tapply(insurance$high.cost == "high", insurance$children, mean)), 1)
+)
+kable(child.table, caption = "Table 3. Number of individuals and percentage of high-cost individuals by number of children.")
+```
+
+Out of the 1338 observations in the data set, only 25 individuals have four children, and 18 have five children. Of the 18 individuals with five children, all but one are not in the high-cost group. To avoid unstable estimates, we create the groups 0, 1, 2, and 3+, where 3+ combines the individuals with three, four, and five children. This helps with the sparse categories and creates a group with 200 individuals.
+
+```{r group-children}
+# Discretize children: combine the sparse categories 3, 4, and 5 into "3+"
+children = insurance$children
+grp.children = as.character(children)
+grp.children[children %in% c(3:5)] = "3+"
+insurance$grp.children = grp.children
+```
+
+### Sex, Smoking Status, and Region
+
+Using factor(), we create dummy variables for sex, smoking status, and region, where R picks the reference level in alphabetical order. The reference levels are: female for sex, no for smoker, northeast for region, and 0 for grp.children. In Tables 4 and 5 below, the differences in the percentage of high-cost individuals between the levels can be seen. Smoking status was previously compared in Table 2.
+
+```{r factor-variables}
+# Use factor() on the categorical variables so glm() builds the dummy variables
+insurance$sex          = factor(insurance$sex)
+insurance$smoker       = factor(insurance$smoker)
+insurance$region       = factor(insurance$region)
+insurance$grp.children = factor(insurance$grp.children)
+```
+
+```{r summary-sex}
+# Count and percentage of high-cost individuals by sex
+insurance %>%
+  group_by(sex) %>%
+  summarize(n = n(), n.high = sum(high.cost == "high"), pct.high = 100*mean(high.cost == "high")) %>%
+  kable(digits = 1, caption = "Table 4. Number and percentage of high-cost individuals by sex.")
+```
+
+```{r summary-region}
+# Count and percentage of high-cost individuals by region
+insurance %>%
+  group_by(region) %>%
+  summarize(n = n(), n.high = sum(high.cost == "high"), pct.high = 100*mean(high.cost == "high")) %>%
+  kable(digits = 1, caption = "Table 5. Number and percentage of high-cost individuals by region.")
+```
+
+The largest difference is displayed by smoking status, with 93.1% of smokers falling in the high-cost group (above the 75th percentile) compared with 7.5% of non-smokers. Males (27.8%) differ only slightly from females (22.2%) in the percentage of high-cost individuals. When evaluating region, the southeast has the highest percentage (30.8%) among all the regions. The levels within each categorical variable have at least 200 observations, suggesting there are no other combinations needed.
+
+# Model Building
+
+To begin, we fit a full model, examine possible multicollinearity, and use forward selection to pick the final model. We then compare the candidate models using the deviance, AIC, and a likelihood ratio test. These goodness-of-fit measures are used only when choosing the model. Lastly, the final model's coefficients are transformed to odds ratios to interpret them.
+
+## Candidate Models
+
+### Full Model
+
+We define the full model as the six explanatory variables (with the grouped number of children) and the interaction terms, BMI-by-smoker and age-by-smoker, that were significant in the last report.
+
+```{r full-model}
+# Largest candidate model: all variables plus the two interactions from the previous report
+full.model = glm(high.cost ~ age + bmi + grp.children + sex + smoker + region + bmi:smoker + age:smoker,
+                 family = binomial(link = "logit"),  # logit(p) = log(p/(1-p))
+                 data = insurance)
+```
+
+### Multicollinearity Check
+
+We use the variance inflation factor (VIF) of the main effects to check for multicollinearity (Table 6).
+
+```{r vif}
+# VIF of the main effects (from library(car)); interaction terms are left out
+main.model = glm(high.cost ~ age + bmi + grp.children + sex + smoker + region,
+                 family = binomial(link = "logit"), data = insurance)
+kable(vif(main.model), digits = 3, caption = "Table 6. Generalized variance inflation factors (GVIF) of the main effects.")
+```
+
+We observe no multicollinearity, with all values being relatively close to one. We keep all the variables, including the main effects of the interaction terms.
+
+## Manual Variable Selection: Reduced Model
+
+Based on our previous report, smoking status was the strongest factor, and the effects of BMI and age depended on it. We therefore force age, BMI, and smoking status into the reduced model, so they are kept in every candidate model.
+
+```{r reduced-model}
+# Reduced model: practically important variables chosen manually
+reduced.model = glm(high.cost ~ age + bmi + smoker,
+                    family = binomial(link = "logit"),
+                    data = insurance)
+```
+
+## Automatic Variable Selection
+
+We use forward selection with AIC, starting from the reduced model, with the full model as the upper limit.
+
+```{r forward-selection, results='hide'}
+# Forward selection between the reduced model (lower) and the full model (upper)
+final.model.forward = stepAIC(reduced.model,
+                      scope = list(lower = formula(reduced.model), upper = formula(full.model)),
+                      direction = "forward",   # forward selection
+                      trace = 0                # do not show the details
+                      )
+formula(final.model.forward)   # model chosen by forward selection
+```
+
+Forward selection added the grouped number of children and both interaction terms, BMI-by-smoker and age-by-smoker, to the reduced model. Sex and region were not added.
+
+## Final Model Identification
+
+Table 7 compares the three candidate models. A smaller AIC means a better balance between fit and model complexity.
+
+```{r goodness}
+## Global goodness-of-fit (function from the class notes)
+global.measure=function(s.logit){
+dev.resid = s.logit$deviance
+dev.0.resid = s.logit$null.deviance
+aic = s.logit$aic
+goodness = cbind(Deviance.residual =dev.resid, Null.Deviance.Residual = dev.0.resid,
+      AIC = aic)
+goodness
+}
+goodness=rbind(full.model = global.measure(full.model),
+      reduced.model=global.measure(reduced.model),
+      final.model=global.measure(final.model.forward))
+row.names(goodness) = c("full.model", "reduced.model", "auto.selected.model")
+kable(goodness, digits = 2, caption = "Table 7. Comparison of global goodness-of-fit statistics of the candidate models.")
+```
+
+```{r lrt, results='hide'}
+# Likelihood ratio chi-squared test: auto-selected model vs full model
+lrt.stat = final.model.forward$deviance - full.model$deviance
+lrt.df = length(coef(full.model)) - length(coef(final.model.forward))
+lrt.pval = pchisq(lrt.stat, df = lrt.df, lower.tail = FALSE)
+c(lrt.stat, lrt.df, lrt.pval)
+```
+
+The results show the **reduced model** has the largest deviance and AIC, so it is underfitted, whereas the **auto.selected.model** has the smallest AIC and a deviance close to the **full.model**. A likelihood ratio chi-squared test is performed to compare the two models, resulting in a test statistic of `r round(final.model.forward$deviance, 2)` - `r round(full.model$deviance, 2)` = `r round(lrt.stat, 2)` with `r lrt.df` degrees of freedom and a p-value of `r round(lrt.pval, 3)`. With no significant difference between the two, the principle of parsimony leads us to use the **auto.selected.model** as the final model. With sex and region included, there is no significant improvement in the fit.
+
+## Inferential Statistics of the Final Model
+
+The final model is
+
+$$\log\frac{p}{1-p} = \beta_0 + \beta_1\,\text{age} + \beta_2\,\text{bmi} + \beta_3\,\text{smoker} + \beta_4\,\text{child1} + \beta_5\,\text{child2} + \beta_6\,\text{child3+} + \beta_7\,(\text{bmi} \times \text{smoker}) + \beta_8\,(\text{age} \times \text{smoker}),$$
+
+where $p$ is the probability of being high-cost, and smoker and the three child terms are dummy variables equal to 1 for that group and 0 otherwise. Table 8 shows the estimated coefficients, their odds ratios, and the 95% confidence intervals of the odds ratios.
+
+```{r final-model}
+# Odds ratios of the final model
+model.coef.stats = summary(final.model.forward)$coef
+odds.ratio = exp(coef(final.model.forward))
+or.ci.95 = exp(confint(final.model.forward))   # 95% CI of the odds ratios
+out.stats = cbind(model.coef.stats, odds.ratio = odds.ratio, or.ci.95)
+kable(out.stats, digits = 4, caption = "Table 8. Inferential statistics of the final model with odds ratios and their 95% confidence intervals.")
+```
+
+The fitted model with the plugged-in estimates is
+
+$$\log\frac{\hat{p}}{1-\hat{p}} = -3.790 + 0.014\,\text{age} + 0.011\,\text{bmi} - 18.639\,\text{smoker} + 0.456\,\text{child1} + 0.837\,\text{child2} + 0.453\,\text{child3+} + 0.647\,(\text{bmi} \times \text{smoker}) + 0.268\,(\text{age} \times \text{smoker}).$$
+
+Considering the large sample size (1338), the p-values in Table 8 are valid because the maximum likelihood estimates are approximately normal for large samples. The test found the interaction terms BMI-by-smoker (p < 0.001) and age-by-smoker (p = 0.0007) to be significant. Due to the hierarchy rule, the main effects of the interaction terms are kept in the model and interpreted together with the interactions.
+
+### Interpretation of the Odds Ratios
+
+Each odds ratio below compares two groups of individuals that are the same in every other variable in the final model.
+
+- **BMI for non-smokers:** The odds ratio is 1.011 (95% CI: 0.973 to 1.050, p = 0.56). The interval contains 1, so BMI is not significantly associated with the odds of high charges among non-smokers.
+- **BMI for smokers:** The odds ratio is $e^{0.0112 + 0.6471} = 1.93$. For a smoker, each one-unit increase in BMI nearly doubles the odds of being high-cost (an increase of about 93%). The BMI-by-smoker odds ratio of 1.91 (95% CI: 1.50 to 2.70) is the ratio of this odds ratio for smokers to the one for non-smokers, and its interval does not contain 1.
+- **Age for non-smokers:** The odds ratio is 1.014 (95% CI: 0.997 to 1.032, p = 0.11). The interval contains 1, so age is not significantly associated with the odds of high charges among non-smokers.
+- **Age for smokers:** The odds ratio is $e^{0.0139 + 0.2679} = 1.33$. For a smoker, each additional year of age increases the odds of being high-cost by about 33%. The age-by-smoker odds ratio of 1.31 (95% CI: 1.15 to 1.58) does not contain 1.
+- **Number of children:** Individuals with two children have 2.31 times the odds of being high-cost compared with individuals with no children (95% CI: 1.27 to 4.18, p = 0.006). The odds ratios for one child (1.58) and for three or more children (1.57) are not significant, since their intervals contain 1.
+- **Smoking status:** The coefficient of smoker ($-18.639$) is the smoker effect with age and BMI at 0. This is considered outside the data range, therefore it should not be interpreted on its own. Since the interactions were significant, the smoker odds ratio changes with age and BMI. Using the coefficient numbering of the final model, the odds ratio comparing a smoker with a non-smoker of the same age, BMI, and number of children is:
+
+$$OR_{\text{smoker vs. non-smoker}} = \exp(\beta_3 + \beta_7\,\text{bmi} + \beta_8\,\text{age}).$$
+
+Table 9 shows this odds ratio at age 40 for three BMI values.
+
+```{r smoker-or}
+# Smoker vs non-smoker odds ratio at three BMI values (age 40)
+b = coef(final.model.forward)
+bmi_vals = c(25, 30, 35)
+# smoker log odds minus non-smoker log odds at the same age and BMI
+log.or = b["smokeryes"] + b["bmi:smokeryes"]*bmi_vals + b["age:smokeryes"]*40
+smoker_table = data.frame(BMI = bmi_vals,
+                          Smoker_vs_Nonsmoker_OR = format(round(exp(log.or)), big.mark = ","))
+kable(smoker_table, row.names = FALSE,
+      caption = "Table 9. Smoker vs. non-smoker odds ratio of being high-cost at three BMI values (age 40).")
+```
+
+We find at age 40 and a BMI of 25 that a smoker's odds of being high-cost are about 3,851 times those of a non-smoker with the same number of children, and the odds ratio grows drastically as BMI increases. However, it is important to recognize that every smoker with a BMI of 30 or more falls in the high-cost group (Section 2.1). In return, the log odds for this group are pushed to very large values, making the odds ratios unstable. In conclusion, smoking is the factor most strongly associated with high cost, and its effect increases with BMI and age.
+
+## Summary of the Model Building
+
+We started from a full model containing all six explanatory variables plus the two interaction terms identified in the earlier report. Multicollinearity checks showed no problems. We then fixed age, BMI, and smoking status in a smaller baseline model and ran forward selection guided by AIC to find the final model. Selection added the grouped number of children and both interaction terms. A likelihood ratio test found no significant difference between this model and the full one, so we adopted it as the final model. Exponentiating the coefficients into odds ratios showed three things:
+
+- Smoking status has by far the strongest association with the odds of high medical charges.
+- BMI and age are significantly linked to higher odds among smokers, but not among non-smokers.
+- Having two children is linked to higher odds than having none.
+
+# Conclusion and Discussion
+
+This section restates the final model and its key results, first for a statistical audience and then for a general one. It also covers the analysis's limitations and the practical recommendations that follow from it.
+
+## Conclusions
+
+The report examined which factors are associated with an individual having high medical charges, defined as charges in the top 25% of the data. Because every smoker's charges exceeded the median, the median was unsuitable as a cut-off, so we used the 75th percentile to define the binary response. Sparse categories of the number of children were merged into broader groups. Age and BMI were left untransformed so the odds ratios keep their original, directly interpretable units. The final model includes age, BMI, smoking status, the grouped number of children, and the BMI-by-smoking and age-by-smoking interactions. Forward selection did not add sex or region, and the likelihood ratio test supported omitting them.
+
+## Main Findings
+
+These results agree with the earlier linear regression report. Smoking status is the dominant factor linked to high charges: 93.1% of smokers fall in the high-cost group, versus only 7.5% of non-smokers. The interactions found in the earlier report are still significant. Among smokers, each one-unit increase in BMI almost doubles the odds of high charges, and each additional year of age raises the odds by roughly 33%. Among non-smokers, neither BMI nor age shows a significant association with the odds of high charges. People with two children have about 2.3 times the odds of high charges compared with people with no children.
+
+## Summary for a General Audience
+
+Put simply, smoking is the characteristic most closely tied to having charges among the highest in the data. In this data set, 93.1% of smokers are in the top-cost group, compared with 7.5% of non-smokers. For smokers, a higher BMI and an older age are tied to even greater odds of being in that group. For non-smokers, we found no statistically significant link between age or BMI and the odds of high charges.
+
+## Drawbacks and Future Improvements
+
+The analysis has several limitations.
+
+1. **Simulated data.** The data was simulated, so it cannot give fully accurate estimates of real-world relationships.
+2. **Dichotomization.** Converting cost into a binary outcome discards information. The cut-off was also chosen after inspecting the data, and a different threshold might change whether the weaker factors reach significance.
+3. **Unstable estimates.** Every smoker with a BMI of 30 or higher is high-cost, so the odds ratios involving smoking status are extremely large and unstable.
+4. **Unexplained non-smokers.** The earlier report noted a group of non-smokers with very high charges. The available variables still do not explain them, and pre-existing medical conditions or alcohol consumption could be responsible.
+5. **Linearity assumption.** The model assumes age and BMI each have a linear relationship with the log odds of high charges within each smoking group.
+6. **Observational design.** Because the study is observational, we cannot conclude that changing someone's smoking status, BMI, or age would change their charges.
+
+For future work, we suggest three steps:
+
+- Collect additional health-related variables.
+- Test whether BMI acts as a threshold effect for smokers rather than a linear one, as suggested in the earlier report.
+- Evaluate how well the model classifies individuals as high-cost. This is a separate question from the association analysis here.
+
+## Recommendations on the Applications of the Model
+
+Insurers and health professionals can draw on the model in the following ways:
+
+1. **Smoking-related interventions merit further study.** The strong association between smoking status and high charges justifies more research into smoking-related health interventions, such as smoking cessation programs. Since insurers use expected charges to set premiums, smoking status is also the most important characteristic for insurers to consider. This analysis does not estimate how much such interventions would lower charges.
+2. **BMI should be considered alongside smoking status.** Among smokers, each additional BMI unit is associated with nearly twice the odds of high charges, while no significant association appeared among non-smokers. Programs targeting BMI may therefore work better if they take smoking status into account.
+3. **Sex and region were not retained.** Once smoking status, age, BMI, and the number of children were in the model, adding sex and region did not significantly improve the fit. Therefore, these two variables need less weight than smoking status when considering high charges.
+
+Finally, the model describes associations only. It cannot predict how a change in smoking status or BMI would affect charges for any particular person.
+
+
+# References
+
+Lantz, B. (2019). *Machine learning with R* (3rd ed.). Packt Publishing.
+
+*Medical cost personal dataset* [Data set]. (n.d.). GitHub. <https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv>
