@@ -1,0 +1,608 @@
+---
+title: Predicting High Medical Charges Billed to Health Insurance Using a Logistic
+  Regression Model
+author: "Kevin Campoverde"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    fig_width: 6
+    fig_height: 4
+    fig_caption: yes
+    number_sections: yes
+    toc_collapsed: yes
+    code_folding: hide
+    code_download: yes
+    smooth_scroll: yes
+    theme: lumen
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+---
+
+```{=html}
+<style type="text/css">
+h1.title {
+  font-size: 24px;
+  font-weight: bold;
+  color: DarkRed;
+  text-align: center;
+  font-family: "Gill Sans", sans-serif;
+}
+h4.author {
+  font-size: 20px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkRed;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkBlue;
+  text-align: center;
+}
+h1 {
+    font-size: 22px;
+    font-weight: bold;
+    font-family: system-ui;
+    color: navy;
+    text-align: left;
+}
+h2 {
+    font-size: 20px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h3 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h4 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: darkred;
+    text-align: left;
+}
+body { background-color:white; }
+.highlightme { background-color:yellow; }
+p { background-color:white; }
+
+table {
+  border-collapse: collapse;
+  margin: 20px auto;
+  font-size: 14px;
+}
+table td, table th {
+  padding: 6px 12px;
+}
+
+.header-section-number::after {
+  content: ".";
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+# Detect, install and load packages if needed
+if (!require("knitr")) {
+   install.packages("knitr")
+   library(knitr)
+}
+if (!require("dplyr")) {
+   install.packages("dplyr")
+   library(dplyr)
+}
+if (!require("MASS")) {
+  install.packages("MASS")
+  library(MASS)
+}
+if (!require("psych")) {
+  install.packages("psych")
+  library(psych)
+}
+if (!require("pROC")) {
+  install.packages("pROC")
+  library(pROC)
+}
+
+# Chunk output options for the knitted report
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      results = TRUE,
+                      comment = NA
+                      )
+```
+
+# Introduction
+
+Medical costs vary greatly across individuals, although it is not always clear where these differences lie. Nonetheless, some factors have a strong link with the medical charges an insurer must cover for an individual, such as age, BMI, region, or lifestyle choices. It is important for us to identify the individuals likely to have high medical charges, since insurers use these expected charges to set the premiums that individuals pay. In the previous report, we used multiple logistic regression to study which factors are associated with high medical charges, with the primary focus on association analysis. However, in this analysis, we look into predicting whether an individual's charges are high.
+
+Using the same data set and candidate models as before, we build a predictive logistic regression model. The first step includes standardizing the numerical explanatory variables and discretizing the sparse discrete variable. Next, we randomly split the data set into two sets: training and testing. The training set is used to compare three candidate models with cross-validation and the ROC curve, where we identify the best predictive model. For the candidate models, we pick the optimal cut-off probability for each one to improve accuracy and allow fair model comparisons. Finally, the report includes the accuracy of the final model on the testing set, which was not used in the model selection.
+
+
+# Description of Data and Variables
+
+In this section, we describe the source of the data, the variables, and the sample size.
+
+## Data Collection Process
+
+This report uses the "Medical Cost Personal Dataset," which is available on GitHub (Lantz, 2019). Rather than using an individual's medical history, the data was simulated to reflect demographic and lifestyle patterns that are openly available from the U.S. Census Bureau. Therefore, the data follows realistic patterns without violating any privacy agreements.
+
+```{r read-data}
+# Read the data set directly from GitHub
+url = "https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv"
+insurance = read.csv(url, header = TRUE)
+
+insurance$cost = insurance$charges   # copy of charges under the name cost
+```
+
+## Variables and Definitions
+
+In this data set, we have a set of seven variables. The variable charges is the yearly medical cost of an individual billed to health insurance, in dollars, and we copied it into a new variable named cost. The **response variable**, high.cost, comes directly from the cost variable, where we label anything above the 75th percentile as high and everything else as not.high (Section 4.1). The variables sd.age, sd.bmi, and grp.children are created from the original variables in Sections 4.3 and 4.4. Table 1 lists all the variables used in the analysis.
+
+```{r variable-table}
+# This creates a table for each variable that describes it
+var_table = data.frame(
+  Variable = c("high.cost", "cost", "age", "sd.age", "bmi", "sd.bmi", "children",
+               "grp.children", "sex", "smoker", "region"),
+  Type = c("Categorical (2 levels) - response", "Numerical (continuous)",
+           "Numerical (continuous)", "Numerical (continuous)",
+           "Numerical (continuous)", "Numerical (continuous)",
+           "Numerical (discrete count)", "Categorical (4 levels)",
+           "Categorical (2 levels)", "Categorical (2 levels)",
+           "Categorical (4 levels)"),
+  Description = c("high = cost above the 75th percentile; not.high = otherwise",
+                  "Individual medical costs billed by health insurance ($)",
+                  "Age of the primary beneficiary (years)",
+                  "Standardized age",
+                  "Body mass index",
+                  "Standardized body mass index",
+                  "Number of children/dependents covered",
+                  "Grouped number of children: 0 / 1 / 2 / 3+",
+                  "female/male", "yes/no",
+                  "northeast / northwest / southeast / southwest")
+)
+
+kable(var_table, caption = "Table 1. Variables used in the analysis.")
+```
+
+The variables used in the models are the binary response, two standardized continuous explanatory variables (sd.age and sd.bmi), and four categorical explanatory variables (grp.children, sex, smoker, and region).
+
+## Sample Size and Missing Values
+
+When examining the data set, we found no missing values among the total of 1338 observations.
+
+```{r sample-size, results='hide'}
+dim(insurance)[1]       # number of observations
+sum(is.na(insurance))   # number of missing values
+```
+
+# Research Question
+
+The practical question is to determine how well age, BMI, number of children, sex, smoking status, and region can predict whether an individual has high medical charges billed to health insurance. Specifically, in this report, we would like to determine which of the three candidate models with their respective optimal cut-off probabilities has the best predictive ability and how accurately the final model predicts individuals who were not used to build it. Since the response is binary, we use multiple logistic regression, and this report focuses only on prediction, not association analysis.
+
+# Exploratory Analysis, Variable Transformation, and Discretization
+
+To begin, we create a binary response by choosing a cut-off for dichotomizing cost. Second, we evaluate the numerical explanatory variables and standardize them. Third, we examine the categorical variables and create a new grouped variable from children (0, 1, 2, and 3+).
+
+## Creating the Binary Response
+
+The natural cut-offs for dichotomizing cost would be either the median or the 75th percentile. Below, the horizontal lines represent the cut-offs of the median (\$`r format(round(median(insurance$cost)), big.mark = ",")`) and the 75th percentile (\$`r format(round(quantile(insurance$cost, 0.75)), big.mark = ",")`) of cost. Figure 1 plots cost against BMI by smoking status, with the median as the dashed line and the 75th percentile as the solid line.
+
+```{r cutoff-plot, fig.align='center', fig.height=4.5, fig.width=7, fig.cap="Figure 1. Cost versus BMI by smoking status. Dashed line: median of cost; solid line: 75th percentile of cost."}
+# Scatter plot of cost vs BMI, colored by smoking status, with the two candidate cut-offs
+plot(insurance$bmi, insurance$cost, pch = 16, cex = 0.5,
+     col = ifelse(insurance$smoker == "yes", "firebrick", "steelblue"),
+     xlab = "BMI", ylab = "Cost ($)", main = "Cost vs BMI by smoking status")
+abline(h = median(insurance$cost), lty = 2, lwd = 2)          # median cut-off
+abline(h = quantile(insurance$cost, 0.75), lty = 1, lwd = 2)  # 75th percentile cut-off
+legend("topleft", legend = c("smoker", "non-smoker"), col = c("firebrick", "steelblue"),
+       pch = 16, bty = "n")
+```
+
+```{r cutoff-table}
+# Number of smokers and non-smokers above each candidate cut-off
+cut.check = data.frame(
+  smoker = levels(factor(insurance$smoker)),
+  n = as.vector(table(insurance$smoker)),
+  above.median = as.vector(tapply(insurance$cost > median(insurance$cost), insurance$smoker, sum)),
+  above.75th.percentile = as.vector(tapply(insurance$cost > quantile(insurance$cost, 0.75),
+                                           insurance$smoker, sum))
+)
+kable(cut.check, caption = "Table 2. Number of individuals above each candidate cut-off by smoking status.")
+```
+
+Figure 1 and Table 2 demonstrate that all 274 smokers have a cost above the median line, so there would be no smokers in the lower-cost group and the model could not estimate the effect of smoking. Therefore, we use the 75th percentile line. Since the separation is no longer complete at the 75th percentile mark (19 smokers fall below it), we label **high-cost** as any individual above it. Using the cut-off, there is no serious imbalance between the two groups, as the data shows there are 335 individuals considered high-cost (25%) and 1,003 not high-cost.
+
+In Figure 1, there is still an observed pattern where the cost of smokers rises as their BMI increases, whereas the cost of a non-smoker stays relatively flat as BMI increases. Notably, we observe that individuals who smoke and have a BMI of 30 or more are all above the high-cost threshold.
+
+By default, glm() models the probability of the second level of a factor, and R orders the levels alphabetically. Since "not.high" comes after "high" alphabetically, we set the levels of high.cost so that the model estimates the probability of being high-cost, $P(\text{high.cost} = \text{high})$.
+
+```{r binary-response}
+# 75th percentile of cost used as the cut-off
+cut.off = quantile(insurance$cost, 0.75)
+
+# Binary response: high = cost above the cut-off
+insurance$high.cost = ifelse(insurance$cost > cut.off, "high", "not.high")
+
+# Set "not.high" as the reference level so glm() models P(high.cost = "high")
+insurance$high.cost = factor(insurance$high.cost, levels = c("not.high", "high"))
+```
+
+## Numerical Explanatory Variables
+
+Using our graphs below, we evaluate any correlation between the numerical explanatory variables along with their distributions.
+
+```{r pairs-panels, fig.align='center', fig.height=6, fig.width=6, fig.cap="Figure 2. Pairwise scatter plots, histograms, and correlations of age, BMI, and number of children."}
+# Pairwise scatter plots with histograms and correlations (from library(psych))
+pairs.panels(insurance[ , c("age", "bmi", "children")],
+             method = "pearson", # correlation method
+             hist.col = "#00AFBB",
+             density = TRUE,  # show density plots
+             ellipses = TRUE  # show correlation ellipses
+             )
+```
+
+The graphs show no signs of multicollinearity, as the correlations between the numerical variables are weak (less than or equal to 0.11). The distributions show age is spread evenly, BMI appears symmetric, and the number of children is heavily right-skewed. To control for the small number of individuals with more than three children, we opt for creating a new categorical variable for children (Section 4.4). Age and BMI are kept as numerical variables and standardized (Section 4.3).
+
+Figure 3 compares age and BMI between the two groups of the response.
+
+```{r boxplots-numerical, fig.align='center', fig.height=4, fig.width=8, fig.cap="Figure 3. Box plots of age and BMI by high-cost status."}
+# Box plots of the numerical variables by the binary response
+par(mfrow = c(1,2))
+boxplot(age ~ high.cost, data = insurance, col = "gray85", main = "Age by high-cost status",
+        xlab = "high.cost", ylab = "Age")
+boxplot(bmi ~ high.cost, data = insurance, col = "gray85", main = "BMI by high-cost status",
+        xlab = "high.cost", ylab = "BMI")
+```
+
+When comparing the two groups, high-cost individuals are slightly older (median age 42 versus 39), and the difference in BMI is negligible (median 30.90 versus 30.14). These differences may be small because smokers and non-smokers are pooled together. Together with Figure 1, this suggests that age and BMI are mainly associated with high cost through their interaction with smoking status. Therefore, we keep the BMI-by-smoker and age-by-smoker interactions in the candidate models.
+
+## Standardizing Numerical Explanatory Variables
+
+Contrary to the previous report, a transformation of the variables **age** and **BMI** is conducted, as a predictive model could improve with the scaling of numerical variables. We dismissed transformation before in favor of interpreting the results using the odds ratios on the original scales. Since this is a predictive model, we do not interpret the coefficients. The variables are standardized using their mean and standard deviation:
+
+$$
+\text{sd.age} = \frac{\text{age} - `r round(mean(insurance$age), 2)`}{`r round(sd(insurance$age), 2)`}, \qquad \text{sd.bmi} = \frac{\text{bmi} - `r round(mean(insurance$bmi), 2)`}{`r round(sd(insurance$bmi), 2)`}.
+$$
+
+Once the two variables are standardized, both have a mean of 0 and a standard deviation of 1. Note that standardizing does not change the shapes of the distributions seen in Figure 2.
+
+```{r standardize}
+## standardizing numerical variables
+insurance$sd.age = (insurance$age - mean(insurance$age))/sd(insurance$age)
+insurance$sd.bmi = (insurance$bmi - mean(insurance$bmi))/sd(insurance$bmi)
+```
+
+## Discretizing the Number of Children
+
+The variable we discretize is the **number of children**. Table 3 shows the number of individuals and the percentage of high-cost individuals for each number of children.
+
+```{r children-table}
+# Frequency and percentage of high-cost individuals for each number of children
+child.table = data.frame(
+  children = names(table(insurance$children)),
+  n = as.vector(table(insurance$children)),
+  pct.high = round(100*as.vector(tapply(insurance$high.cost == "high", insurance$children, mean)), 1)
+)
+kable(child.table, caption = "Table 3. Number of individuals and percentage of high-cost individuals by number of children.")
+```
+
+Out of the 1338 observations in the data set, only 25 individuals have four children, and 18 have five children. Of the 18 individuals with five children, all but one are not in the high-cost group. To avoid unstable estimates, we create the groups 0, 1, 2, and 3+, where 3+ combines the individuals with three, four, and five children. This helps with the sparse categories and creates a group with 200 individuals.
+
+```{r group-children}
+# Discretize children: combine the sparse categories 3, 4, and 5 into "3+"
+children = insurance$children
+grp.children = as.character(children)
+grp.children[children %in% c(3:5)] = "3+"
+insurance$grp.children = grp.children
+```
+
+## Categorical Explanatory Variables
+
+Using factor(), we create dummy variables for sex, smoking status, and region, where R picks the reference level in alphabetical order. The reference levels are: female for sex, no for smoker, northeast for region, and 0 for grp.children. In Tables 4 and 5 below, the differences in the percentage of high-cost individuals between the levels can be seen. Smoking status was previously compared in Table 2.
+
+```{r factor-variables}
+# Use factor() on the categorical variables so glm() builds the dummy variables
+insurance$sex          = factor(insurance$sex)
+insurance$smoker       = factor(insurance$smoker)
+insurance$region       = factor(insurance$region)
+insurance$grp.children = factor(insurance$grp.children)
+```
+
+```{r summary-sex}
+# Count and percentage of high-cost individuals by sex
+insurance %>%
+  group_by(sex) %>%
+  summarize(n = n(), n.high = sum(high.cost == "high"), pct.high = 100*mean(high.cost == "high")) %>%
+  kable(digits = 1, caption = "Table 4. Number and percentage of high-cost individuals by sex.")
+```
+
+```{r summary-region}
+# Count and percentage of high-cost individuals by region
+insurance %>%
+  group_by(region) %>%
+  summarize(n = n(), n.high = sum(high.cost == "high"), pct.high = 100*mean(high.cost == "high")) %>%
+  kable(digits = 1, caption = "Table 5. Number and percentage of high-cost individuals by region.")
+```
+
+The largest difference is displayed by smoking status, with 93.1% of smokers falling in the high-cost group (above the 75th percentile) compared with 7.5% of non-smokers. Males (27.8%) differ only slightly from females (22.2%) in the percentage of high-cost individuals. When evaluating region, the southeast has the highest percentage (30.8%) among all the regions. The levels within each categorical variable have at least 200 observations, suggesting there are no other combinations needed.
+
+Lastly, we keep only the response and the variables used in the models, and drop the original versions of the transformed variables.
+
+```{r analytic-data}
+## keep the response and the modeling variables only
+sd.insurance = insurance[, c("high.cost", "sd.age", "sd.bmi", "grp.children",
+                             "sex", "smoker", "region")]
+```
+
+# Data Split - Training and Testing Data
+
+In this data set, we use cross-validation because, for a predictive model, no general theory can quantify how well the model can predict new observations, so we hold out a part of the data as "unseen" observations to test it. We first randomly split the data into two subsets: training and testing data. 70% of the data is used as the training data, which we use to fit the candidate models, validate them, and identify the final model using the cross-validation method. The rest is used as the testing data to assess the predictive performance of the final model.
+
+```{r data-split}
+## splitting data: 70% training and 30% testing
+set.seed(123)                         # makes the random split reproducible
+n = dim(sd.insurance)[1]
+train.n = round(0.7*n)
+train.id = sample(1:n, train.n, replace = FALSE)
+## training and testing data sets
+train = sd.insurance[train.id, ]
+test = sd.insurance[-train.id, ]
+```
+
+In doing so, the training set has `r dim(train)[1]` individuals (`r sum(train$high.cost == "high")` high-cost, `r round(100*mean(train$high.cost == "high"), 1)`%) and the testing set has `r dim(test)[1]` individuals (`r sum(test$high.cost == "high")` high-cost, `r round(100*mean(test$high.cost == "high"), 1)`%). The two sets are similar to the full data, since about 25% of the individuals in each are high-cost.
+
+# Candidate Models
+
+In contrast to the previous report, the three candidate models now use the standardized versions of age and BMI.
+
+- **Full model (candidate 1):** We define the full model as the six explanatory variables (with the grouped number of children) and the interaction terms, BMI-by-smoker and age-by-smoker, that were significant in the last report,
+$$\text{high.cost} \sim \text{sd.age} + \text{sd.bmi} + \text{grp.children} + \text{sex} + \text{smoker} + \text{region} + \text{sd.bmi:smoker} + \text{sd.age:smoker}.$$
+- **Reduced model (candidate 3):** The previous report found smoking to be the strongest factor, and the effects of BMI and age depended on it. We therefore force age, BMI, and smoking status into the reduced model, so they are kept in every candidate model,
+$$\text{high.cost} \sim \text{sd.age} + \text{sd.bmi} + \text{smoker}.$$
+- **Stepwise model (candidate 2):** We use forward selection with AIC, starting from the reduced model, with the full model as the upper limit.
+
+# Final Model Selection
+
+Here we use cross-validation on the training data to find the optimal cut-off probability for each candidate model and which of the candidate models has the best predictive performance. The testing data is then used to report the actual accuracy of the final model. Lastly, in order to compare the global performance of the candidate models, we examine the ROC curves.
+
+## Cross-Validation for Model Identification
+
+Since the training data has `r dim(train)[1]` individuals, we use the common 10-fold cross-validation, which leaves an average of about `r round(sum(train$high.cost == "high")/10)` high-cost individuals per fold. In each of the 10 rounds, one fold is held out as the validation set, all three candidate models are fit to the remaining folds, and forward selection is rerun for the stepwise model. Next, we predict the chance of being high-cost for each individual in the validation fold. The probability for an individual to be high-cost must have a threshold to determine their classification. To do so, we find the optimal cut-off probability for each model. Consider a cut-off of 0.5; every individual with a probability larger than 0.5 would be considered high-cost. However, a cut-off of 0.5 may not be optimal, so we test 19 cut-off probabilities, from 0.05 to 0.95 in steps of 0.05, for each model. The proportion of individuals who are misclassified in the validation fold is called the predictive error (PE) and is defined as
+
+$$
+PE = \frac{FP + FN}{TP + FP + TN + FN}.
+$$
+
+```{r cross-validation}
+## 10-fold cross-validation
+k = 10
+## floor() function must be used to avoid producing NA in the subsequent results
+fold.size = floor(dim(train)[1]/k)
+## sequence of cut-off probabilities to test
+cut.seq = seq(0.05, 0.95, by = 0.05)
+m = length(cut.seq)
+## PE matrices for candidate models: rows = folds, columns = cut-off probabilities
+PE1 = matrix(0, nrow = k, ncol = m)
+PE2 = matrix(0, nrow = k, ncol = m)
+PE3 = matrix(0, nrow = k, ncol = m)
+for(i in 1:k){
+  ## Training and validation folds
+  valid.id = (fold.size*(i-1)+1):(fold.size*i)
+  valid = train[valid.id, ]
+  train.dat = train[-valid.id, ]
+  ## full model
+  candidate01 = glm(high.cost ~ sd.age + sd.bmi + grp.children + sex + smoker + region +
+                      sd.bmi:smoker + sd.age:smoker,
+                    family = binomial(link = "logit"),
+                    data = train.dat)
+  ## reduced model
+  candidate03 = glm(high.cost ~ sd.age + sd.bmi + smoker,
+                    family = binomial(link = "logit"),
+                    data = train.dat)
+  ## stepwise model: forward selection from the reduced model to the full model
+  candidate02 = stepAIC(candidate03,
+                      scope = list(lower = formula(candidate03), upper = formula(candidate01)),
+                      direction = "forward",   # forward selection
+                      trace = 0                # do not show the details
+                      )
+  ## predicted probabilities of each candidate model
+  pred01 = predict(candidate01, newdata = valid, type = "response")
+  pred02 = predict(candidate02, newdata = valid, type = "response")
+  pred03 = predict(candidate03, newdata = valid, type = "response")
+  ## predicted outcomes and predictive errors at each cut-off probability
+  for(j in 1:m){
+    pre.outcome01 = ifelse(pred01 > cut.seq[j], "high", "not.high")
+    pre.outcome02 = ifelse(pred02 > cut.seq[j], "high", "not.high")
+    pre.outcome03 = ifelse(pred03 > cut.seq[j], "high", "not.high")
+    ## predictive error = proportion of misclassified individuals
+    PE1[i, j] = 1 - sum(pre.outcome01 == as.vector(valid$high.cost))/length(pred01)
+    PE2[i, j] = 1 - sum(pre.outcome02 == as.vector(valid$high.cost))/length(pred02)
+    PE3[i, j] = 1 - sum(pre.outcome03 == as.vector(valid$high.cost))/length(pred03)
+  }
+}
+## average predictive error of each model at each cut-off (average over the 10 folds)
+avg.PE1 = colMeans(PE1)
+avg.PE2 = colMeans(PE2)
+avg.PE3 = colMeans(PE3)
+## optimal cut-off = cut-off with the smallest average predictive error
+opt.cut1 = cut.seq[which.min(avg.PE1)]
+opt.cut2 = cut.seq[which.min(avg.PE2)]
+opt.cut3 = cut.seq[which.min(avg.PE3)]
+## position of the default cut-off 0.5 in the sequence (for comparison)
+id.05 = which(round(cut.seq, 2) == 0.5)
+avg.pe = data.frame(Model = c("Full model", "Stepwise model", "Reduced model"),
+                    Optimal.cut.off = c(opt.cut1, opt.cut2, opt.cut3),
+                    Avg.PE.optimal.cut.off = c(min(avg.PE1), min(avg.PE2), min(avg.PE3)),
+                    Avg.PE.cut.off.0.5 = c(avg.PE1[id.05], avg.PE2[id.05], avg.PE3[id.05]))
+kable(avg.pe, digits = 4, caption = "Table 6. Optimal cut-off probability and average predictive errors of the candidate models from the 10-fold cross-validation.")
+```
+
+In Figure 4, we can find the optimal cut-off of each model, which is the one with the highest accuracy, since it plots the average accuracy (1 - average PE) of each candidate model against the cut-off probability.
+
+```{r cutoff-accuracy, fig.align='center', fig.width=6, fig.height=4.5, fig.cap="Figure 4. Average cross-validation accuracy of the three candidate models at each cut-off probability. Vertical lines mark the optimal cut-off of each model."}
+## accuracy versus cut-off probability for the three candidate models
+plot(cut.seq, 1 - avg.PE1, type = "b", pch = 16, col = 2, lty = 1, ylim = c(0.5, 1),
+     xlab = "Cut-off probability", ylab = "Average accuracy",
+     main = "Accuracy versus cut-off probability",
+     cex.main = 0.8, col.main = "navy")
+lines(cut.seq, 1 - avg.PE2, type = "b", pch = 17, col = 3, lty = 2)
+lines(cut.seq, 1 - avg.PE3, type = "b", pch = 15, col = 4, lty = 3)
+abline(v = c(opt.cut1, opt.cut2, opt.cut3), col = 2:4, lty = 1:3)   # optimal cut-offs
+legend("bottomright", c("Full model", "Stepwise model", "Reduced model"),
+       col = 2:4, lty = 1:3, pch = c(16, 17, 15), cex = 0.8, bty = "n")
+```
+
+Figure 4 reveals a low accuracy for all three models when the cut-off is relatively small. This reflects the misclassification of low-cost individuals into the high-cost group. Between about 0.2 and 0.8, the lines are fairly flat, showing that the accuracy changes very little over this range of cut-offs. Table 6 shows the optimal cut-off probabilities are `r opt.cut1` for the full model, `r opt.cut2` for the stepwise model, and `r opt.cut3` for the reduced model, and each optimal cut-off gives a slightly lower average predictive error than the default 0.5. At their optimal cut-offs, the reduced model has the largest average predictive error (`r round(min(avg.PE3), 4)`), suggesting it is underfitted, whereas the full model (`r round(min(avg.PE1), 4)`) and the stepwise model (`r round(min(avg.PE2), 4)`) have almost the same predictive error, with a difference of only `r round(abs(min(avg.PE2) - min(avg.PE1)), 4)`. With almost no difference between the two, the principle of parsimony leads us to use the simpler **stepwise model** as the final model, with its optimal cut-off probability of **`r opt.cut2`**.
+
+## Final Model Reporting
+
+Next, we fit the winner, the stepwise model, to the entire training set to obtain the final working model.
+
+```{r final-model}
+## full and reduced models fit to the entire training set (scope of the selection)
+full.model = glm(high.cost ~ sd.age + sd.bmi + grp.children + sex + smoker + region +
+                   sd.bmi:smoker + sd.age:smoker,
+                 family = binomial(link = "logit"),
+                 data = train)
+reduced.model = glm(high.cost ~ sd.age + sd.bmi + smoker,
+                    family = binomial(link = "logit"),
+                    data = train)
+## final model: forward selection on the entire training set
+final.model = stepAIC(reduced.model,
+                      scope = list(lower = formula(reduced.model), upper = formula(full.model)),
+                      direction = "forward",   # forward selection
+                      trace = 0                # do not show the details
+                      )
+```
+
+On the entire training set, forward selection added the grouped number of children, region, and both interaction terms, BMI-by-smoker and age-by-smoker, to the reduced model. Sex was not added. The final model is
+
+$$\text{high.cost} \sim \text{sd.age} + \text{sd.bmi} + \text{smoker} + \text{grp.children} + \text{region} + \text{sd.bmi:smoker} + \text{sd.age:smoker}.$$
+
+However, the actual accuracy reported for the final model must be based on the testing data, using the optimal cut-off probability of the stepwise model (`r opt.cut2`) found in the cross-validation (Table 7).
+
+```{r test-accuracy}
+## predicted probabilities of the final model on the testing data
+pred.test = predict(final.model, newdata = test, type = "response")
+## predicted outcomes using the optimal cut-off of the stepwise model from the cross-validation
+pred.test.outcome = ifelse(as.vector(pred.test) > opt.cut2, "high", "not.high")
+## actual accuracy = proportion of correctly classified individuals in the testing data
+accuracy = sum(pred.test.outcome == test$high.cost)/length(pred.test)
+kable(data.frame(Accuracy = accuracy, Predictive.Error = 1 - accuracy), digits = 4,
+      caption = paste0("Table 7. Actual accuracy and predictive error of the final model on the testing data (cut-off probability ", opt.cut2, ")."))
+```
+
+The final model correctly classified `r round(100*accuracy, 1)`% of the `r dim(test)[1]` individuals in the testing data, so its actual predictive error is `r round(1 - accuracy, 4)`. This is higher than the average predictive error of the stepwise model in the cross-validation (`r round(min(avg.PE2), 4)`), which is expected since the validation error is generally underestimated when it is used to select the final model. For comparison, `r round(100*mean(test$high.cost == "not.high"), 1)`% of the testing data is not high-cost, so predicting every individual as not high-cost would give an accuracy of `r round(100*mean(test$high.cost == "not.high"), 1)`%. The final model does much better than this.
+
+**Remark**: Since the training and testing data were defined by a random split, re-running the code with a different seed will give slightly different performance measures.
+
+## ROC Analysis - Global Performance
+
+The ROC curve allows the comparison of global performance between the candidate models over all cut-off probabilities. A larger area under the curve (AUC) suggests a better global performance. Since the ROC curve is used for model selection, we build the ROC curves from the training data using the three candidate models.
+
+Using the following function, we can estimate the TPR and FPR at each cut-off probability for every candidate model.
+
+```{r tpr-fpr}
+## A function to extract true positive and false positive rates
+TPR.FPR=function(pred){
+  prob.seq = seq(0,1, length=50)  # 50 equally spaced cut-off probabilities
+  pn=length(prob.seq)
+  true.lab=as.vector(train$high.cost)
+  TPR = NULL
+  FPR = NULL
+  ##
+  for (i in 1:pn){
+   pred.lab = as.vector(ifelse(pred > prob.seq[i],"high", "not.high"))
+   TPR[i] = length(which(true.lab=="high" & pred.lab=="high"))/length(which(true.lab=="high"))
+   FPR[i] = length(which(true.lab=="not.high" & pred.lab=="high"))/length(which(true.lab=="not.high"))
+  }
+ cbind(FPR = FPR, TPR = TPR)
+}
+```
+
+The ROC curves of the three candidate models are given in Figure 5.
+
+```{r roc-curves, fig.align='center', fig.width=5, fig.height=5, fig.cap="Figure 5. ROC curves of the three candidate models on the training data, with the AUC of each model."}
+## predicted probabilities on the training data
+pred01 = predict.glm(full.model, newdata = train, type="response")     # full model
+pred02 = predict.glm(final.model, newdata = train, type="response")    # stepwise model
+pred03 = predict.glm(reduced.model, newdata = train, type="response")  # reduced model
+## ROC curve
+plot(TPR.FPR(pred01)[,1], TPR.FPR(pred01)[,2],
+     type="l", col=2, lty=1, xlim=c(0,1), ylim=c(0,1),
+     xlab = "FPR: 1 - specificity",
+     ylab ="TPR: sensitivity",
+     main = "ROC curves of the three candidate models",
+     cex.main = 0.8,
+     col.main = "navy")
+lines(TPR.FPR(pred02)[,1], TPR.FPR(pred02)[,2],  col=3, lty=2)
+lines(TPR.FPR(pred03)[,1], TPR.FPR(pred03)[,2],  col=4, lty=3)
+## AUC of each candidate model (from library(pROC))
+category = train$high.cost == "high"
+ROCobj01 <- roc(category, as.vector(pred01))
+ROCobj02 <- roc(category, as.vector(pred02))
+ROCobj03 <- roc(category, as.vector(pred03))
+AUC01 = round(auc(ROCobj01),4)
+AUC02 = round(auc(ROCobj02),4)
+AUC03 = round(auc(ROCobj03),4)
+##
+legend("bottomright", c(paste("Full model: AUC = ",AUC01),
+                       paste("Stepwise model: AUC = ",AUC02),
+                       paste("Reduced model: AUC = ", AUC03)),
+      col=2:4, lty=1:3, cex = 0.8, bty="n")
+```
+
+The ROC curves in Figure 5 further support that the full and stepwise models have a better global performance than the reduced model. Since there is very little difference between the full and stepwise models (AUC of `r AUC01` versus `r AUC02`), we opt for the simpler of the two, leading to the same conclusion as the cross-validation. The accuracy of the stepwise model on the testing data is given in Section 7.2.
+
+# Conclusion and Discussion
+
+This section restates the final model and its key results. It also covers the analysis's limitations and the practical recommendations that follow from it.
+
+## Conclusions
+
+This report intended to find a model with the best predictive power in determining whether an individual has high medical charges (top 25%). Every smoker observation was above the median threshold, leaving no smokers in the lower-cost group to compare with. We found this to be unsuitable and chose the 75th percentile, as it captures the smokers whose costs are much higher than the others, while still leaving some smokers below the cut-off. Since there was only a small number of observations in some categories of the number of children (4 and 5), we merged them into a broader group (3+). For a possible improvement in predictive performance, we standardized age and BMI, putting them on the same scale. The training (70%) and testing (30%) data came from a random split of the data. Using 10-fold cross-validation on the training data, we determined the optimal cut-off probability for each candidate model. The full model and the stepwise model had almost the same average predictive error, and both did better than the reduced model. Once all results were compared, we chose the simpler stepwise model due to the principle of parsimony, and this was supported by the ROC curves and AUCs. The final model consisted of age, BMI, smoking status, the grouped number of children, region, and the interactions BMI-by-smoking and age-by-smoking, while forward selection did not add sex. When the final model was applied to the testing data with its optimal cut-off probability of `r opt.cut2`, it had an accuracy of `r round(100*accuracy, 1)`%.
+
+## Summary for a General Audience
+
+In simpler terms, we built a model to predict whether an individual will be among the high-cost individuals. We tested it on a group of people who were not used to build it, and the final model correctly predicted about `r round(100*accuracy)` out of every 100 of these people. The findings still suggest that smoking is the variable most closely tied to high cost. In this data set, with the 75th percentile threshold, 93.1% of smokers were in the top-cost group compared with 7.5% of non-smokers.
+
+## Drawbacks and Future Improvements
+
+While the model may offer some insights, it is important to note its current shortcomings:
+
+1. **Simulated data.** Because the data was simulated rather than taken from real-world clinical records, the exact numbers might not match reality. The model's performance could be quite different if applied to actual patient data.
+2. **Dichotomization.** Converting cost into a binary outcome throws away valuable nuance. The cut-off was also chosen after looking at the data, and a different cut-off might change the predictive performance of the model.
+3. **Cut-off probability.** We found the optimal cut-off probability for each of the candidate models by testing in increments of 0.05. The accuracy was fairly flat over a wide range of cut-offs, and a finer search or a different split may slightly alter the cut-off.
+4. **Unstable estimates.** Every smoker with a BMI of 30 or higher is high-cost, so the coefficients involving smoking status are very large and may be unstable.
+5. **Unexplained non-smokers.** The earlier report noted a group of non-smokers with very high charges. The available variables still do not explain them, and pre-existing medical conditions or alcohol consumption could be responsible.
+6. **Single random split.** The reported accuracy is based on one random split of the data, so a different split would give a slightly different accuracy.
+
+For future work, we suggest two steps:
+
+- Gather additional health-related variables.
+- Test whether BMI acts as a threshold effect for smokers rather than a linear one, as suggested in the earlier report.
+
+
+## Recommendations on the Applications of the Model
+
+This model is not meant to predict an exact dollar amount, but it may be a useful guide for insurers to flag individuals who are more likely to have high medical charges before the charges occur. It may also be used to identify people who may benefit from smoking cessation programs and other health interventions. While this model may predict those who are at risk, it is important to keep in mind that it cannot predict the change in cost if individuals decide to quit smoking or lose weight.
+
+
+# References
+
+Lantz, B. (2019). *Machine learning with R* (3rd ed.). Packt Publishing.
+
+*Medical cost personal dataset* [Data set]. (n.d.). GitHub. <https://raw.githubusercontent.com/stedy/Machine-Learning-with-R-datasets/master/insurance.csv>
