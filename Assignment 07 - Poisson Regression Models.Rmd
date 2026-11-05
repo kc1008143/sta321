@@ -1,0 +1,553 @@
+---
+title: "Daily Cyclist Counts on the Williamsburg Bridge: Poisson Regression on Counts and Rates"
+author: "Kevin Campoverde"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: yes
+    toc_float: yes
+    toc_depth: 4
+    fig_width: 6
+    fig_height: 4
+    fig_caption: yes
+    number_sections: yes
+    toc_collapsed: yes
+    code_folding: hide
+    code_download: yes
+    smooth_scroll: yes
+    theme: lumen
+    highlight: tango
+editor_options:
+  chunk_output_type: inline
+---
+
+```{=html}
+<style type="text/css">
+h1.title {
+  font-size: 24px;
+  font-weight: bold;
+  color: DarkRed;
+  text-align: center;
+  font-family: "Gill Sans", sans-serif;
+}
+h4.author {
+  font-size: 20px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkRed;
+  text-align: center;
+}
+h4.date {
+  font-size: 18px;
+  font-weight: bold;
+  font-family: system-ui;
+  color: DarkBlue;
+  text-align: center;
+}
+h1 {
+    font-size: 22px;
+    font-weight: bold;
+    font-family: system-ui;
+    color: navy;
+    text-align: left;
+}
+h2 {
+    font-size: 20px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h3 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: navy;
+    text-align: left;
+}
+h4 {
+    font-size: 18px;
+    font-weight: bold;
+    font-family: "Times New Roman", Times, serif;
+    color: darkred;
+    text-align: left;
+}
+body { background-color:white; }
+.highlightme { background-color:yellow; }
+p { background-color:white; }
+
+table {
+  border-collapse: collapse;
+  margin: 20px auto;
+  font-size: 14px;
+}
+table td, table th {
+  padding: 6px 12px;
+}
+
+.header-section-number::after {
+  content: ".";
+}
+</style>
+```
+
+```{r setup, include=FALSE}
+# Detect, install and load packages if needed
+if (!require("knitr")) {
+   install.packages("knitr")
+   library(knitr)
+}
+if (!require("openxlsx")) {
+   install.packages("openxlsx")
+   library(openxlsx)
+}
+
+# Chunk output options for the knitted report
+knitr::opts_chunk$set(echo = TRUE,
+                      warning = FALSE,
+                      message = FALSE,
+                      results = TRUE,
+                      comment = NA,
+                      fig.align = 'center'
+                      )
+```
+
+# Introduction
+
+In this section, we will introduce the purpose and the research questions, and then preview the source of the data, the variables, and the number of observations.
+
+## Rationale and Research Questions
+
+In a city as busy as New York, there are a considerable number of individuals cycling in and out of Manhattan across the East River bridges each day. However, the number of cyclists changes from day to day and may depend on the weather and the day of the week. Knowing these factors may benefit maintenance planning and decisions on the number of bike lanes across Brooklyn, Queens, and Manhattan. The response variable in this report is a count, unlike our previous reports that used continuous (medical cost) and binary (high cost) responses. Therefore, our approach differs, and we use Poisson regression.
+
+The following report will look into the variables in our data set, specifically considering the day of the week and the weather (temperature and rain), to determine their possible association with the count of cyclists on the Williamsburg Bridge using data gathered in July 2017. Do the day of the week, the high temperature, the low temperature, and the precipitation have associations with the number of cyclists who entered and left the Williamsburg Bridge? How are those same factors associated with the proportion (rate) of all East River bridge cyclists who used the Williamsburg Bridge, which tells us how this bridge compares with the other three bridges instead of how many people ride overall? The response variable for both questions is WilliamsburgBridge, where we evaluate the daily count of cyclists and, using Total, the proportion of all four-bridge cyclists who used this bridge.
+
+# Materials
+
+In this section, we will cover where the data comes from, how we obtained our data set, and the variables.
+
+## Data Collection
+
+The data shows the number of cyclists who entered and left the four East River bridges: the Brooklyn Bridge, Manhattan Bridge, Williamsburg Bridge, and Queensboro Bridge. The information was collected using the Traffic Information Management System (TIMS), and each record is the total number of cyclists in a 24-hour period. The professor split the data into 10 subsets (sheets), where each sheet has one bridge for one month of 2017 (Peng, n.d.).
+
+## Choosing and Loading the Data Set
+
+In this report, we analyzed the daily cyclist counts on the Williamsburg Bridge in July 2017, which was the sheet named data6.
+
+```{r get-sheet}
+# Random draw of the data set (assignment code)
+# set.seed() makes the draw give the same sheet every time the report is knitted
+set.seed(321)
+id = sample(1:10, 1)
+paste("data", id, sep = "")
+```
+
+```{r save-sheet, eval=FALSE}
+# Assignment code used ONCE to create the .csv file (not run when knitting)
+dat <- read.xlsx("https://pengdsci.github.io/STA321/ww09/w09-AssignDataSet.xlsx",
+                 sheet = paste("data", id, sep = ""))    # sheet data6 = Williamsburg Bridge, July 2017
+write.csv(dat, paste(names(dat[6]), ".csv", sep=""))    # saves WilliamsburgBridge.csv
+```
+
+```{r read-data}
+# Read the data set directly from GitHub
+url = "https://kc1008143.github.io/sta321/WilliamsburgBridge.csv"
+cyclist = read.csv(url, header = TRUE)[,-1]   # drop the row-number column
+
+# Excel stores dates as numbers, so convert them back to dates (from library(openxlsx))
+cyclist$Date = convertToDate(cyclist$Date)
+# The Day column is also a date; weekdays() turns it into the name of the day
+cyclist$Day = weekdays(convertToDate(cyclist$Day))
+# Make Day a factor with Monday (the start of the week) as the baseline day
+cyclist$Day = relevel(factor(cyclist$Day), ref = "Monday")
+```
+
+## Variables
+
+Variables are listed below with their type and a brief description.
+
+```{r variable-table}
+# This creates a table for each variable that describes it
+var_table = data.frame(
+  Variable = c("Date", "Day", "HighTemp", "LowTemp", "Precipitation",
+               "WilliamsburgBridge", "Total"),
+  Type = c("ID", "Categorical (7 levels)", "Numerical (continuous)",
+           "Numerical (continuous)", "Numerical (continuous)",
+           "Numerical (count) - response", "Numerical (count) - offset in rate model"),
+  Description = c("Date of the observation (July 1 to July 31, 2017)",
+                  "Day of the week (Monday to Sunday)",
+                  "Highest temperature of the day (°F)",
+                  "Lowest temperature of the day (°F)",
+                  "Amount of precipitation of the day (inches)",
+                  "Number of cyclists who entered and left the Williamsburg Bridge",
+                  "Number of cyclists on all four East River bridges")
+)
+kable(var_table, caption = "Table 1. Variables in the data set.")
+```
+
+There are a total of four explanatory variables (Day, HighTemp, LowTemp, and Precipitation), one response variable (WilliamsburgBridge), and the variable Total, which is only used for the rate model.
+
+## Sample Size and Missing Values
+
+Table 2 below summarizes the number of observations, any missing values, the frequency of each day in the month, and the number of rainy days.
+
+```{r sample-size}
+# Number of days, rainy days, and missing values for each day of the week
+day.levels = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+n.days  = as.vector(table(cyclist$Day)[day.levels])
+n.rainy = as.vector(tapply(cyclist$Precipitation > 0, cyclist$Day, sum)[day.levels])
+n.miss  = as.vector(tapply(rowSums(is.na(cyclist)), cyclist$Day, sum)[day.levels])
+sample.table = data.frame(Day = c(day.levels, "Total"),
+                          Days = c(n.days, sum(n.days)),
+                          Rainy.days = c(n.rainy, sum(n.rainy)),
+                          Missing.values = c(n.miss, sum(n.miss)))
+kable(sample.table, col.names = c("Day", "Days", "Rainy days", "Missing values"),
+      caption = "Table 2. Number of days, rainy days, and missing values by day of the week.")
+```
+
+From the table, we find there are a total of 31 observations (days in July) with 0 missing values. There are a total of 8 rainy days in July, with Monday, Friday, and Saturday each having two rainy days, whereas Tuesday and Wednesday had no rainy days.
+
+# Exploratory Data Analysis
+
+Before we build the models, we examine the distributions, assess any possible correlations between the two temperature variables, and determine if there is a change in the number of cyclists with day, temperature, and rain.
+
+## Numerical Variables
+
+Table 3 presents the summary statistics of the numerical variables.
+
+```{r summary-table}
+# Summary statistics of the numerical variables
+num.vars = cyclist[, c("HighTemp", "LowTemp", "Precipitation", "WilliamsburgBridge", "Total")]
+sum.stats = data.frame(
+  Mean   = sapply(num.vars, mean),
+  SD     = sapply(num.vars, sd),
+  Min    = sapply(num.vars, min),
+  Median = sapply(num.vars, median),
+  Max    = sapply(num.vars, max)
+)
+kable(sum.stats, digits = 2, caption = "Table 3. Summary statistics of the numerical variables.")
+```
+
+The table reports that approximately 6,074 cyclists used the Williamsburg Bridge in a day on average, ranging from as few as 2,974 to at most 8,605. With an average of 18,805 cyclists per day on all four bridges, the Williamsburg Bridge accounts for 32.3% of all cyclists on the four bridges, and its observed daily share ranges from 26.5% to 36.2% (Table 4). As for precipitation, there is a mean of 0.14 inches, ranging from 0 (no rain) to 1.78 inches. The median is 0, which indicates a right skew in the distribution of precipitation, considering there are 23 days with no rain.
+
+Table 4 lists the Williamsburg Bridge's share of cyclists, the variance of the daily count, and the correlation between the two temperatures.
+
+```{r extra-stats}
+# Additional statistics referenced in the exploratory analysis
+share = 100*cyclist$WilliamsburgBridge/cyclist$Total   # daily share (%) of the four-bridge cyclists
+extra.stats = data.frame(
+  Statistic = c("Share of all four-bridge cyclists (%)",
+                "Lowest daily share (%)",
+                "Highest daily share (%)",
+                "Variance of the daily count",
+                "Variance-to-mean ratio",
+                "Correlation between HighTemp and LowTemp"),
+  Value = c(100*sum(cyclist$WilliamsburgBridge)/sum(cyclist$Total),
+            min(share),
+            max(share),
+            var(cyclist$WilliamsburgBridge),
+            var(cyclist$WilliamsburgBridge)/mean(cyclist$WilliamsburgBridge),
+            cor(cyclist$HighTemp, cyclist$LowTemp))
+)
+kable(extra.stats, digits = 2, format.args = list(big.mark = ","),
+      caption = "Table 4. Share, variance, and temperature correlation of the Williamsburg Bridge data.")
+```
+
+Figure 1 illustrates the distribution of the response.
+
+```{r count-hist, fig.height=4, fig.width=6, fig.cap="Figure 1. Distribution of the daily number of cyclists on the Williamsburg Bridge in July 2017."}
+# Histogram of the response variable
+hist(cyclist$WilliamsburgBridge, col = "gray85", xlab = "Number of cyclists per day",
+     main = "Daily Williamsburg Bridge cyclists")
+```
+
+The distribution suggests there is a large number of cyclists (4,000–9,000) on most days, whereas only a few days have a low number of cyclists. Of the 4 days in the range 2,000–4,000, 3 were rainy days and the other was July 4th. Considering the variance of 2,482,822 is about 409 times the mean (Table 4), the Poisson assumption that the mean equals the variance may not hold. This can possibly be explained by the predictors. Furthermore, the correlation between LowTemp and HighTemp is 0.81 (Table 4). Therefore, to interpret each coefficient, the other variable must be held fixed.
+
+## Weather and the Daily Count
+
+Figure 2 plots the daily count against HighTemp and against Precipitation.
+
+```{r weather-plots, fig.height=4, fig.width=8, fig.cap="Figure 2. Daily number of cyclists on the Williamsburg Bridge versus the high temperature (left) and the precipitation (right). Red points are rainy days."}
+# Scatter plots of the count against the weather variables
+par(mfrow = c(1,2))
+rain.col = ifelse(cyclist$Precipitation > 0, "firebrick", "steelblue")   # red = rainy day
+plot(cyclist$HighTemp, cyclist$WilliamsburgBridge, pch = 16, col = rain.col,
+     xlab = "High temperature (degrees F)", ylab = "Number of cyclists",
+     main = "Count vs high temperature")
+legend("left", legend = c("rain", "no rain"), col = c("firebrick", "steelblue"),
+       pch = 16, bty = "n")
+plot(cyclist$Precipitation, cyclist$WilliamsburgBridge, pch = 16, col = rain.col,
+     xlab = "Precipitation (inches)", ylab = "Number of cyclists",
+     main = "Count vs precipitation")
+```
+
+The left panel shows no clear association between high temperature and the number of cyclists, and the cooler days with low counts were mostly rainy. The right panel shows a large drop in cyclists when there is rain, considering that all 5 days with more than 0.3 inches of precipitation had fewer than 5,000 cyclists. Table 5 compares the average daily count on days with and without rain.
+
+```{r rain-table}
+# Average daily count on dry days and on rainy days
+rainy = cyclist$Precipitation > 0                       # TRUE = rainy day
+rain.table = data.frame(Weather = c("No rain", "Rain"),
+                        Days = c(sum(!rainy), sum(rainy)),
+                        Mean = c(mean(cyclist$WilliamsburgBridge[!rainy]),
+                                 mean(cyclist$WilliamsburgBridge[rainy])))
+kable(rain.table, digits = 2, format.args = list(big.mark = ","),
+      col.names = c("Weather", "Number of days", "Mean daily count"),
+      caption = "Table 5. Average daily number of cyclists on the Williamsburg Bridge on days with and without rain.")
+```
+
+The averages in Table 5 show about 6,645 cyclists on days when it does not rain and 4,430 on days when it does rain.
+
+## Day of the Week
+
+Figure 3 compares the daily count across the days of the week.
+
+```{r day-boxplot, fig.height=4, fig.width=7, fig.cap="Figure 3. Daily number of cyclists on the Williamsburg Bridge by day of the week. The red point is July 4 (a Tuesday)."}
+# Order the days from Monday to Sunday for the plot only
+day.order = factor(cyclist$Day, levels = c("Monday", "Tuesday", "Wednesday", "Thursday",
+                                           "Friday", "Saturday", "Sunday"))
+boxplot(cyclist$WilliamsburgBridge ~ day.order, col = "gray85",
+        xlab = "", ylab = "Number of cyclists", main = "Count by day of the week",
+        cex.axis = 0.8)   # smaller axis text so all seven day names fit
+# Mark July 4 (Tuesday is the 2nd box) and label it with its count
+july4 = cyclist$WilliamsburgBridge[cyclist$Date == as.Date("2017-07-04")]
+points(2, july4, pch = 19, col = "firebrick")
+text(2, july4, paste("July 4 (", format(july4, big.mark = ","), ")", sep = ""),
+     pos = 4, offset = 1, cex = 0.8)
+```
+
+The box plots show a larger number of cyclists on most weekdays compared to the weekends, where Monday and Wednesday show the highest medians. Friday has a median similar to the weekend; however, it has a larger range. The plot indicates there is a larger number of cyclists during most weekdays, which could result from the workweek. However, Friday has the lowest median compared to the rest of the weekdays. July 4th landed on a Tuesday and could be the explanation behind the stretched box, with that day having only 3,684 cyclists (red point in Figure 3). Since an unusual day like July 4th can pull down a day's counts even when it did not rain, both weather and day are included in the model.
+
+# Poisson Regression Models
+
+To start, we consider the assumptions of the Poisson regression model and how the model can be effective in answering the questions. Next, we build models designed to estimate either the expected daily count or the proportion of the four-bridge cyclists given the conditions. Using the four predictors, we interpret the p-values to perform variable selection and interpret the regression coefficients of the models.
+
+## Model Assumptions
+
+- **Poisson response:** The response is the number of cyclists in a day (a count over a fixed time period).
+- **Independence:** The observations are not dependent on one another.
+- **Mean equals variance:** For given values of the predictors, the mean of the response is equal to its variance.
+- **Linearity:** The log of the mean count is a linear function of the predictors.
+
+The coefficients represent the change in the log of the expected count for every one-unit increase in a predictor while all other predictors are held fixed. Taking the exponential of a coefficient gives the ratio of the expected counts. When we model the rate, we add the log of Total to the model as an offset. The only categorical variable is Day, and its reference level would be Friday by default, so we set it to Monday since the week starts there.
+
+## Poisson Regression on Counts
+
+### Full Poisson Count Model
+
+With our model and assumptions established, we fit the Poisson regression to the cyclist count using all four predictors.
+
+```{r count-model}
+# Poisson regression on the counts with all four predictors
+count.model = glm(WilliamsburgBridge ~ Day + HighTemp + LowTemp + Precipitation,
+                 family = poisson(link = "log"), data = cyclist)
+count.coef = summary(count.model)$coef
+count.ci = exp(confint(count.model))   # 95% CI of the ratios
+count.coef = cbind(count.coef, exp.Estimate = exp(count.coef[,1]),
+                   CI.lower = count.ci[,1], CI.upper = count.ci[,2])
+kable(count.coef, digits = 4,
+      col.names = c("Estimate", "Std. Error", "z value", "p-value", "Ratio", "95% CI lower", "95% CI upper"),
+      caption = "Table 6. Inferential statistics of the Poisson regression model on the counts. The Ratio column is exp(Estimate), the ratio of the expected counts, and the last two columns give its 95% confidence interval.")
+```
+
+### P-Value Variable Selection for the Count Model
+
+A likelihood ratio test is conducted to compare the count model with and without Day (Table 7).
+
+```{r count-lrt}
+# Likelihood ratio test for Day as a whole: model without Day vs model with Day
+count.noday = glm(WilliamsburgBridge ~ HighTemp + LowTemp + Precipitation,
+                  family = poisson(link = "log"), data = cyclist)
+lrt.count = count.noday$deviance - count.model$deviance
+lrt.count.p = pchisq(lrt.count, df = 6, lower.tail = FALSE)
+lrt.count.table = data.frame(Comparison = "Model without Day vs. model with Day",
+                             Statistic = lrt.count, df = 6,
+                             p = ifelse(lrt.count.p < 0.001, "< 0.001", round(lrt.count.p, 4)))
+kable(lrt.count.table, digits = 2, col.names = c("Comparison", "Test statistic", "df", "p-value"),
+      caption = "Table 7. Likelihood ratio test for Day in the count model.")
+```
+
+From Table 6, we observe statistical significance in HighTemp, LowTemp, and Precipitation, and in the following levels of the variable Day: Tuesday, Wednesday, Friday, Saturday, and Sunday (p < 0.05). Since Monday is our reference group, we note no significant difference in the expected number of daily cyclists crossing the Williamsburg Bridge between Monday and Thursday (p = 0.768). The test indicates that Day as a whole is significant (test statistic = 3812.87, df = 6, p < 0.001; Table 7), so we keep it in the model. The results find all four predictors significant, thus we retain all variables. The full model in Table 6 is our final count model. These results should be interpreted with caution since each day's estimate relies on only four or five days in the month. Additionally, with only a small number of rainy days, the estimated association of precipitation is less certain.
+
+### Interpreting the Count Model Coefficients
+
+```{r count-numbers, include=FALSE}
+# Coefficients of the count model (used for the graphs in Section 4.4)
+bf = coef(count.model)
+```
+
+When assessing each coefficient, we look at the change from a one-unit increase in that variable while every other variable is held fixed. The ratios come from the Ratio column of Table 6. Thursday is the only level that has a 95% CI containing 1, agreeing with its p-value of 0.768.
+
+- **High temperature:** For every one-degree increase in high temperature, the expected count rises by about 0.8% (ratio ≈ 1.008), or about 8.7% for a 10-degree warmer day.
+- **Low temperature:** For every one-degree increase in low temperature, the expected count falls by about 0.7%, or about 7.0% for a 10-degree warmer night. Although LowTemp has a negative coefficient, it does not suggest an association between warmer weather and fewer cyclists. Since the two temperature variables are strongly correlated (r = 0.81), this coefficient compares days with the same high temperature, and when both temperatures rise together, the expected count still increases slightly.
+- **Precipitation:** For every additional 0.1 inch of precipitation, the expected count falls by about 3.7% (ratio ≈ 0.963), or about 31.2% for one full inch of rain (ratio ≈ 0.688), which is within our data range (0 to 1.78 inches).
+- **Day:** Compared with Monday, the expected count is:
+    - **Higher** on Wednesday by about 11.0% (ratio ≈ 1.110), the day with the highest expected count.
+    - **Lower** on Tuesday by about 2.0% (ratio ≈ 0.980), which may be partly due to the July 4 holiday, and on Friday by about 9.7% (ratio ≈ 0.903). The weekend has the largest drop, with Saturday about 23.6% lower (ratio ≈ 0.764) and Sunday about 27.1% lower (ratio ≈ 0.729).
+    - **Not significantly different** on Thursday (ratio ≈ 1.003, p = 0.768).
+- **Intercept:** The intercept is 8.6634, which means the expected count on a Monday with a high and low temperature of 0°F and no rain would be about 5,787 cyclists (exp(8.6634) ≈ 5,787). This has no practical meaning, because 0°F is outside our data range (the July high temperatures ranged from 69.1°F to 93°F), so using it would be extrapolation.
+
+Within the range of temperatures observed in July, the count model suggests that the number of cyclists on the Williamsburg Bridge is higher on warmer days and lower on rainy days and on weekends.
+
+## Poisson Regression on Rates
+
+### Full Poisson Rate Model
+
+The count model shows how many cyclists used the Williamsburg Bridge but not how this bridge compares with the other bridges, since it does not consider how many people cycled across all four bridges each day. To answer our second research question, we model the proportion of all four-bridge cyclists who used the Williamsburg Bridge by adding log(Total) as the offset.
+
+```{r rate-model}
+# Poisson regression on the rates: log(Total) is the offset
+rate.model = glm(WilliamsburgBridge ~ Day + HighTemp + LowTemp + Precipitation,
+                  offset = log(Total), family = poisson(link = "log"), data = cyclist)
+rate.coef = summary(rate.model)$coef
+kable(rate.coef, digits = 4, col.names = c("Estimate", "Std. Error", "z value", "p-value"),
+      caption = "Table 8. Inferential statistics of the full Poisson regression model on the rates (proportion of all four-bridge cyclists who used the Williamsburg Bridge).")
+```
+
+### P-Value Variable Selection for the Rate Model
+
+In Table 8, HighTemp and LowTemp are significant, but Precipitation is not (p = 0.510), so we remove Precipitation and refit the model with Day, HighTemp, and LowTemp. The model in Table 9 is the final rate model.
+
+```{r rate-final}
+# Final rate model without Precipitation
+rate.final = glm(WilliamsburgBridge ~ Day + HighTemp + LowTemp,
+                 offset = log(Total), family = poisson(link = "log"), data = cyclist)
+rate.final.coef = summary(rate.final)$coef
+rate.ci = exp(confint(rate.final))     # 95% CI of the ratios
+rate.final.coef = cbind(rate.final.coef, exp.Estimate = exp(rate.final.coef[,1]),
+                        CI.lower = rate.ci[,1], CI.upper = rate.ci[,2])
+kable(rate.final.coef, digits = 4,
+      col.names = c("Estimate", "Std. Error", "z value", "p-value", "Ratio", "95% CI lower", "95% CI upper"),
+      caption = "Table 9. Inferential statistics of the final Poisson regression model on the rates. The Ratio column is exp(Estimate), the ratio of the expected rates, and the last two columns give its 95% confidence interval.")
+```
+
+Table 10 compares the final rate model with and without Day using a likelihood ratio test.
+
+```{r rate-lrt}
+# Likelihood ratio test for Day as a whole: model without Day vs model with Day
+rate.noday = glm(WilliamsburgBridge ~ HighTemp + LowTemp,
+                 offset = log(Total), family = poisson(link = "log"), data = cyclist)
+lrt.rate = rate.noday$deviance - rate.final$deviance
+lrt.rate.p = pchisq(lrt.rate, df = 6, lower.tail = FALSE)
+lrt.rate.table = data.frame(Comparison = "Model without Day vs. model with Day",
+                            Statistic = lrt.rate, df = 6,
+                            p = ifelse(lrt.rate.p < 0.001, "< 0.001", round(lrt.rate.p, 4)))
+kable(lrt.rate.table, digits = 2, col.names = c("Comparison", "Test statistic", "df", "p-value"),
+      caption = "Table 10. Likelihood ratio test for Day in the final rate model.")
+```
+
+After removing precipitation, both temperature variables remain significant in the final rate model (p < 0.001 for HighTemp and LowTemp). For Day, both Wednesday (p = 0.4059) and Thursday (p = 0.7401) have no significant difference from Monday. However, the likelihood ratio test still finds Day as a whole significant (test statistic = 107.28, df = 6, p < 0.001; Table 10), so it is kept. In comparison to the count model, the p-values are considerably larger, and these p-values may change once the dispersion of the model is checked in the next assignment.
+
+### Interpreting the Rate Model Coefficients
+
+```{r rate-numbers, include=FALSE}
+# Coefficients of the final rate model (used for the graphs in Section 4.4)
+br = coef(rate.final)
+```
+
+Each interpretation below holds the other predictors in the model fixed. The ratios come from the Ratio column of Table 9. Except for Wednesday and Thursday, none of the 95% confidence intervals of the ratios in Table 9 contain 1, which agrees with the p-values.
+
+- **Day:** Compared with Monday, the expected share of cyclists who used the Williamsburg Bridge is:
+    - **Higher** on Friday by about 2.8% (ratio ≈ 1.028) and on Saturday by about 2.5% (ratio ≈ 1.025).
+    - **Lower** on Tuesday by about 3.4% (ratio ≈ 0.966), and Sunday has the lowest share, about 4.2% lower (ratio ≈ 0.958).
+    - **Not significantly different** on Wednesday (ratio ≈ 1.007, p = 0.4059) and Thursday (ratio ≈ 0.997, p = 0.7401).
+- **High temperature:** For every one-degree increase in high temperature, the expected share falls by about 0.5% (ratio ≈ 0.995), or about 5.2% for a 10-degree warmer day (ratio ≈ 0.948), with the low temperature held fixed. Although HighTemp has a negative coefficient, it does not suggest an association between warmer weather and a smaller share of cyclists on the Williamsburg Bridge. Since the two temperature variables are strongly correlated, this coefficient compares days with the same low temperature.
+- **Low temperature:** For every one-degree increase in low temperature, the expected share rises by about 0.8% (ratio ≈ 1.008), or about 8.3% for a 10-degree warmer night (ratio ≈ 1.083). As in the count model, this compares days with the same high temperature.
+- **Precipitation:** Precipitation was removed from the final rate model because it was not significant (p = 0.510 in Table 8), so the amount of rain is not significantly associated with the Williamsburg Bridge's share of cyclists.
+- **Intercept:** The intercept is −1.2503, which means the expected share on a Monday with a high and low temperature of 0°F would be about 28.6% (exp(−1.2503) ≈ 0.286). This has no practical meaning, because 0°F is outside our data range (the July high temperatures ranged from 69.1°F to 93°F), so using it would be extrapolation.
+
+The practical size of the rate model's effects is small. In the count model, every additional inch of rain is associated with about 31.2% fewer cyclists on the Williamsburg Bridge, but precipitation was not significant in the rate model. Hence, with the small changes in the split between the bridges, there may be an association between bad weather and fewer cyclists on all four bridges.
+
+## Graphical Comparison of the Two Models
+
+Figures 4 and 5 show the expected values from each model by day of the week, with the temperatures held at their July averages (82.7°F high and 71.1°F low). Figure 4 compares a dry day with a day of 0.5 inch of rain, which is within the observed range. Figure 5 has only one line because Precipitation is not in the final rate model.
+
+```{r graph-values}
+# Day effects from each model, ordered Monday to Sunday (Monday is the baseline = 0)
+day.names = c("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+day.freq = c(0, bf["DayTuesday"], bf["DayWednesday"], bf["DayThursday"], bf["DayFriday"],
+             bf["DaySaturday"], bf["DaySunday"])
+day.rate = c(0, br["DayTuesday"], br["DayWednesday"], br["DayThursday"], br["DayFriday"],
+             br["DaySaturday"], br["DaySunday"])
+
+# Expected count = exp(intercept + day + temperatures at their means + rain)
+temp.freq = bf["HighTemp"]*mean(cyclist$HighTemp) + bf["LowTemp"]*mean(cyclist$LowTemp)
+count.dry  = exp(bf[1] + day.freq + temp.freq)
+count.rain = exp(bf[1] + day.freq + temp.freq + bf["Precipitation"]*0.5)
+
+# Expected rate (proportion of all four-bridge cyclists), in percent
+temp.rate = br["HighTemp"]*mean(cyclist$HighTemp) + br["LowTemp"]*mean(cyclist$LowTemp)
+rate.line = 100*exp(br[1] + day.rate + temp.rate)
+```
+
+```{r count-graph, fig.height=4.5, fig.width=7, fig.cap="Figure 4. Expected daily number of cyclists on the Williamsburg Bridge by day of the week for a dry day and a rainy day (0.5 inches), based on the count model with temperatures at their July averages."}
+plot(1:7, count.dry, type = "l", lty = 1, lwd = 2, col = "steelblue",
+     xlab = "", ylab = "Expected number of cyclists",
+     ylim = c(0, max(count.dry)*1.1),
+     main = "Expected Daily Count by Day of the Week", axes = FALSE)
+axis(2)
+axis(1, labels = day.names, at = 1:7, cex.axis = 0.8)
+points(1:7, count.dry, pch = 19, col = "steelblue")
+lines(1:7, count.rain, lty = 2, lwd = 2, col = "firebrick")
+points(1:7, count.rain, pch = 17, col = "firebrick")
+legend("bottomleft", c("dry day", "rainy day (0.5 inches)"), pch = c(19, 17),
+       lty = 1:2, lwd = 2, bty = "n", col = c("steelblue", "firebrick"))
+```
+
+Figure 4 highlights a weekly pattern, with the highest expected count on Wednesday (about 7,660 on a dry day) and a drop to its lowest on the weekend (about 5,027 on a dry Sunday). Additionally, for every day of the week, half an inch of rain is associated with a 17.1% reduction in the expected number of cyclists. Since the model is on the log scale, the lines have the same shape, and the gap between them is largest on the busiest days.
+
+```{r rate-graph, fig.height=4.5, fig.width=7, fig.cap="Figure 5. Expected proportion (%) of all four-bridge cyclists who used the Williamsburg Bridge by day of the week, based on the final rate model with temperatures at their July averages."}
+plot(1:7, rate.line, type = "l", lty = 1, lwd = 2, col = "steelblue",
+     xlab = "", ylab = "Expected rate (%)",
+     ylim = c(0, 40),
+     main = "Expected Williamsburg Bridge Share by Day of the Week", axes = FALSE)
+axis(2)
+axis(1, labels = day.names, at = 1:7, cex.axis = 0.8)
+points(1:7, rate.line, pch = 19, col = "steelblue")
+```
+
+Like Figure 4, the y-axis of Figure 5 starts at 0. The expected share stays between about 31% and 33% every day, with Friday the highest (33.3%) and Sunday the lowest (31.1%). This suggests that the weekend and rain are associated with how many people ride, but much less with which bridge they use.
+
+# Results and Conclusions
+
+This section summarizes the findings from the two models.
+
+## Summary of the Two Models
+
+All four predictors (Day, HighTemp, LowTemp, and Precipitation) were statistically significant and retained in the count model. The final rate model included all of them except Precipitation, since it was not significant.
+
+- **Count model:** The four predictors are associated with the daily number of cyclists. A 10-degree higher high temperature (with the low temperature held fixed) is associated with about 8.7% more cyclists, every 0.1 inch of rain with about 3.7% fewer, and Saturday and Sunday with about 23.6% and 27.1% fewer than Monday.
+- **Rate model:** Considering the total number of cyclists on all four bridges, precipitation was no longer significant, and the other effects were all under 10% (comparing days of the week or a 10-degree change in temperature). The Williamsburg Bridge's expected share stays close to 32% on every day of the week, with the lowest share on Sunday.
+- **Comparing the two:** The count model tells us how many people ride, while the rate model reveals the share of riders that use the Williamsburg Bridge. The weather and the day of the week are mainly associated with how many people ride, while the Williamsburg Bridge's expected share stays about the same.
+
+# General Discussion
+
+This section links the results back to the research questions, how we can use the information, the limitations, and future improvements.
+
+## Answering the Research Questions
+
+The day of the week, HighTemp, LowTemp, and Precipitation were all found to be associated with the daily count of cyclists on the Williamsburg Bridge. The final rate model found every variable except precipitation to be significant; however, the Williamsburg Bridge's expected share of cyclists changed very little, staying between about 31% and 33% across the days of the week (the observed daily shares ranged from 26.5% to 36.2%).
+
+## Recommendations
+
+These results could be used by city transportation planners when scheduling work and planning for cyclists on the East River bridges.
+
+- **Maintenance and closure scheduling:** Sunday had the lowest expected count, about 27.1% lower than Monday. Scheduling maintenance or lane closures on Sundays would likely affect the fewest cyclists.
+- **Peak demand and resource planning:** Wednesday had the highest expected count, about 11.0% higher than Monday, and a 10-degree higher high temperature was associated with about 8.7% more cyclists. Warm weekdays may need the most attention for bike lane capacity and safety.
+- **Coordinated cross-bridge planning:** Since the Williamsburg Bridge's expected share stayed close to 32% on every day of the week, the busy and quiet days on this bridge tend to match those of the four bridges combined. Planning for the bridges together, rather than one at a time, may be more effective.
+- **Caveat:** These are associations from one month of data, so they should be checked with data from other months before being used.
+
+## Limitations
+
+1. **Small sample:** The data only includes 31 days from July, so other seasons may show different patterns. The July 4 holiday is also included in the data and may have lowered the Tuesday estimates.
+2. **Assumptions not checked:** The variance of the daily count was about 409 times the mean, which suggests the mean-equals-variance assumption may be violated. If so, the standard errors and p-values may be too small and the confidence intervals too narrow.
+3. **Correlated temperatures:** HighTemp and LowTemp have a correlation of 0.81, so the LowTemp coefficient only compares days with the same high temperature and is harder to interpret on its own.
+4. **Independence:** The counts on consecutive days may be related, which would go against the independence assumption.
+5. **Observational data:** The data is observational, so the results only show associations, not cause and effect.
+
+## Future Improvements
+
+First, we could collect data for more months so that the estimates are based on more than 31 days. With more data, precipitation could also be grouped into levels, such as light, moderate, and heavy rain, to see how the amount of rain is associated with the number of cyclists. There were only 8 rainy days in July, which can create unstable estimates for each rain level that are subject to large changes with additional data. Also, the variance of the daily counts was much larger than the mean, which suggests overdispersion. A quasi-Poisson model could be used to adjust the standard errors and p-values for this. Lastly, holidays such as July 4th could be treated as their own group by adding a holiday variable, since those days may have different cycling patterns.
+
+# References
+
+Peng, C. (n.d.). *NYC cyclist data set (w09-AssignDataSet.xlsx)* [Data set]. STA321 course materials. <https://pengdsci.github.io/STA321/ww09/w09-AssignDataSet.xlsx>
